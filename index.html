@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard Maternal</title>
+  <?!= include('Styles') ?>
+  <?!= include('StylesHighRisk') ?>
+  <?!= include('StylesAnalytics') ?>
+</head>
+<body>
+  <div id="loadingOverlay" class="loading-overlay" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="loadingText">Memuat...</p>
+  </div>
+
+  <?!= include('PageLogin') ?>
+
+  <div id="appShell" class="app-shell" hidden>
+    <?!= include('Navigation') ?>
+    <main class="main-content">
+      <div id="globalMessage" aria-live="polite"></div>
+      <?!= include('PageMain') ?>
+      <?!= include('PageHighRisk') ?>
+      <?!= include('PageAnalytics') ?>
+      <?!= include('PageAdmin') ?>
+    </main>
+  </div>
+
+  <?!= include('Scripts') ?>
+  <?!= include('ScriptsHighRisk') ?>
+  <?!= include('ScriptsAnalytics') ?>
+</body>
+</html>

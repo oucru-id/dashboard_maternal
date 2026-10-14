@@ -1,0 +1,43 @@
+<header class="topbar">
+  <button id="menuButton" class="icon-button mobile-only" type="button" aria-label="Buka menu">&#9776;</button>
+  <div class="brand">
+    <div class="brand-mark">M</div>
+    <div>
+      <strong id="brandTitle">Dashboard Maternal</strong>
+      <small>Riwayat klinis maternal</small>
+    </div>
+  </div>
+  <div class="user-menu">
+    <div class="user-copy">
+      <strong id="navUserName">-</strong>
+      <small id="navUserRole">-</small>
+    </div>
+    <button class="button button-secondary" type="button" onclick="openPasswordDialog()">Ganti kata sandi</button>
+    <button class="button button-ghost" type="button" onclick="handleLogout()">Keluar</button>
+  </div>
+</header>
+
+<aside id="sidebar" class="sidebar">
+  <nav aria-label="Navigasi utama">
+    <button class="nav-link active" type="button" data-page="home" onclick="navigateTo('home')">
+      <span aria-hidden="true">&#8962;</span><span>Data klinis</span>
+    </button>
+    <button class="nav-link" type="button" data-page="high-risk" onclick="navigateTo('high-risk')">
+      <span aria-hidden="true">&#9888;</span><span>Kehamilan risiko tinggi</span>
+    </button>
+    <button class="nav-link" type="button" data-page="risk-analytics" onclick="navigateTo('risk-analytics')">
+      <span aria-hidden="true">&#9638;</span><span>Analitik risiko kehamilan</span>
+    </button>
+    <button id="adminNav" class="nav-link" type="button" data-page="admin" onclick="navigateTo('admin')" hidden>
+      <span aria-hidden="true">&#9881;</span><span>Kelola pengguna</span>
+    </button>
+  </nav>
+  <div class="mobile-account-actions">
+    <button class="nav-link" type="button" onclick="openPasswordDialog()">Ganti kata sandi</button>
+    <button class="nav-link" type="button" onclick="handleLogout()">Keluar</button>
+  </div>
+  <div class="sidebar-note">
+    <strong>MATNEO</strong>
+    <span>Telusuri pasien atau pantau kehamilan aktif berdasarkan evidence terkini.</span>
+  </div>
+</aside>

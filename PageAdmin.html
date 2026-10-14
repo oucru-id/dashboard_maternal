@@ -1,0 +1,89 @@
+<section id="page-admin" class="page">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Administrasi</p>
+      <h1>Kelola pengguna</h1>
+      <p class="muted">Buat akun, atur peran, nonaktifkan akses, atau setel ulang kata sandi sementara.</p>
+    </div>
+    <button class="button button-primary" type="button" onclick="openUserDialog()">Tambah pengguna</button>
+  </div>
+
+  <div id="adminMessage" aria-live="polite"></div>
+  <div class="card table-card">
+    <div class="table-toolbar">
+      <label class="search-field" for="userSearch">
+        <span class="sr-only">Cari pengguna</span>
+        <input id="userSearch" type="search" placeholder="Cari nama atau email" oninput="renderUsers()">
+      </label>
+      <span id="userCount" class="muted">0 pengguna</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Pengguna</th>
+            <th>Peran</th>
+            <th>Status</th>
+            <th>Diperbarui</th>
+            <th class="actions-column">Aksi</th>
+          </tr>
+        </thead>
+        <tbody id="usersTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<dialog id="userDialog" class="dialog">
+  <form id="userForm" method="dialog">
+    <div class="dialog-header">
+      <div>
+        <p class="eyebrow">Administrasi</p>
+        <h2 id="userDialogTitle">Tambah pengguna</h2>
+      </div>
+      <button class="icon-button" type="button" onclick="closeUserDialog()" aria-label="Tutup">&times;</button>
+    </div>
+    <input id="editingEmail" type="hidden">
+    <label for="userEmail">Email</label>
+    <input id="userEmail" type="email" autocomplete="off" required>
+    <label for="userName">Nama</label>
+    <input id="userName" type="text" autocomplete="off" required>
+    <label for="userRole">Peran</label>
+    <select id="userRole" required>
+      <option value="user">Pengguna</option>
+      <option value="admin">Admin</option>
+    </select>
+    <fieldset class="scope-fields">
+      <legend>Cakupan fasilitas (opsional)</legend>
+      <p class="muted scope-help">Disimpan sebagai hook otorisasi. Penyaringan data belum diterapkan sampai aturan akses fasilitas disetujui.</p>
+      <div class="scope-grid">
+        <label for="userPuskesmas">Puskesmas
+          <input id="userPuskesmas" type="text" autocomplete="off">
+        </label>
+        <label for="userKecamatan">Kecamatan
+          <input id="userKecamatan" type="text" autocomplete="off">
+        </label>
+        <label for="userDesa">Desa
+          <input id="userDesa" type="text" autocomplete="off">
+        </label>
+        <label for="userIdUser">ID pengguna sumber
+          <input id="userIdUser" type="number" step="1" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+    </fieldset>
+    <label class="checkbox-row">
+      <input id="userActive" type="checkbox" checked>
+      <span>Akun aktif</span>
+    </label>
+    <div id="temporaryPasswordGroup">
+      <label for="temporaryPassword">Kata sandi sementara</label>
+      <input id="temporaryPassword" type="password" autocomplete="new-password">
+      <small class="muted">Pengguna wajib menggantinya saat login pertama.</small>
+    </div>
+    <div id="userFormMessage" aria-live="polite"></div>
+    <div class="dialog-actions">
+      <button class="button button-secondary" type="button" onclick="closeUserDialog()">Batal</button>
+      <button id="saveUserButton" class="button button-primary" type="submit">Simpan</button>
+    </div>
+  </form>
+</dialog>

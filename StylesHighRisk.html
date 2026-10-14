@@ -1,0 +1,124 @@
+<style>
+  .high-risk-view { display: grid; gap: 1.15rem; }
+  .high-risk-heading { align-items: center; }
+  .freshness-note { margin: .35rem 0 0; color: #4f6669; font-size: .8rem; font-weight: 700; }
+  .high-risk-filter-card { display: grid; gap: 1rem; border-top: 4px solid var(--primary-500); }
+  .filter-heading, .filter-actions, .detail-title-row, .pagination-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  }
+  .filter-heading h2, .filter-heading p { margin-bottom: .25rem; }
+  .high-risk-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem 1rem; }
+  .high-risk-filter-grid label, .compact-select { display: grid; gap: .35rem; margin: 0; }
+  .filter-actions { padding-top: .9rem; border-top: 1px solid var(--line); }
+  code { padding: .08rem .3rem; border-radius: 5px; background: #eef4f3; color: var(--primary-900); }
+
+  .metric-card-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .8rem; margin-top: 1rem; }
+  .metric-card { min-width: 0; min-height: 118px; display: flex; flex-direction: column; justify-content: space-between; gap: .75rem; padding: 1rem; border: 1px solid var(--line); border-top: 4px solid var(--primary-500); border-radius: 14px; background: white; box-shadow: 0 7px 24px rgba(21,62,58,.05); }
+  .metric-card span { color: var(--muted); font-size: .78rem; font-weight: 750; line-height: 1.35; }
+  .metric-card strong { color: var(--primary-900); font-size: clamp(1.55rem, 3vw, 2.15rem); }
+  .metric-card.urgent { border-top-color: #a92f35; }
+  .metric-card.urgent strong { color: #8e2228; }
+  .metric-card.high { border-top-color: #df704b; }
+  .metric-card.high strong { color: #a54628; }
+  .metric-card.conflict { border-top-color: #d9a130; }
+  .metric-card.conflict strong { color: #8a5a12; }
+  .metric-card.unknown { border-top-color: #7b8795; }
+  .metric-card.normal { border-top-color: #49906a; }
+  .metric-card.normal strong { color: var(--success); }
+
+  .follow-up-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; }
+  .follow-up-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.15rem; border: 1px solid #e5d0a8; border-radius: 12px; background: #fff9ed; color: var(--warning); text-align: left; }
+  .follow-up-card span { font-weight: 750; }
+  .follow-up-card strong { font-size: 1.45rem; }
+  .follow-up-card.clinical-follow-up { border-color: #c8d7e6; background: #f2f7fb; color: #355d78; }
+
+  .risk-panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .risk-panel { display: grid; gap: 1rem; }
+  .risk-panel h2, .risk-panel p { margin-bottom: .25rem; }
+  .risk-bars { display: grid; gap: .75rem; }
+  .risk-bar { display: grid; grid-template-columns: minmax(135px, 1fr) 2fr auto; align-items: center; gap: .7rem; }
+  .risk-bar-label { color: #42575a; font-size: .82rem; font-weight: 700; }
+  .risk-bar-track { height: 10px; overflow: hidden; border-radius: 999px; background: #e9f0ef; }
+  .risk-bar-fill { height: 100%; min-width: 0; border-radius: inherit; background: var(--primary-500); }
+  .risk-bar-value { min-width: 2.5rem; text-align: right; font-weight: 800; }
+  .compact-table table { min-width: 520px; }
+  .compact-table th, .compact-table td { padding: .72rem .75rem; }
+  .comparison-number { font-size: 1.05rem; font-weight: 850; }
+  .comparison-number.current { color: var(--primary-700); }
+  .comparison-number.assessed { color: #52606d; }
+
+  .diagnosis-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
+  .diagnosis-overview-item { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .85rem; border: 1px solid #d9e3e1; border-radius: 11px; background: #f7faf9; }
+  .diagnosis-overview-item span { color: #42575a; font-size: .8rem; font-weight: 700; }
+  .diagnosis-overview-item strong { color: var(--primary-900); font-size: 1.25rem; }
+
+  .alert-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
+  .alert-summary-item { display: grid; gap: .3rem; padding: .85rem; border: 1px solid #e7d9bd; border-radius: 11px; background: #fffbf4; }
+  .alert-summary-item span { color: #715f3c; font-size: .78rem; font-weight: 700; }
+  .alert-summary-item strong { color: var(--warning); font-size: 1.3rem; }
+  .overlap-note { margin: -.35rem 0 .1rem; }
+
+  .location-card .table-toolbar h2, .location-card .table-toolbar p { margin-bottom: .2rem; }
+  .location-table { min-width: 1260px; }
+  .location-name { max-width: 250px; font-weight: 800; overflow-wrap: anywhere; }
+  .location-warning { color: var(--warning); }
+  .numeric-cell { font-variant-numeric: tabular-nums; font-weight: 750; }
+  .percentage-cell { white-space: nowrap; }
+  .compact-select { min-width: 190px; }
+  .bnba-table { min-width: 2050px; }
+  .bnba-table td { max-width: 240px; vertical-align: top; }
+  .person-cell strong, .person-cell small { display: block; }
+  .person-cell small { margin-top: .25rem; }
+  .table-stack { display: grid; gap: .22rem; }
+  .pagination-bar { padding: 1rem 1.2rem; }
+
+  .status-badge.urgent { background: #f9dfe0; color: #8e2228; }
+  .status-badge.high-risk { background: #fde7df; color: #a54628; }
+  .status-badge.conflicting { background: #fff0cf; color: #81530e; }
+  .status-badge.not-assessable { background: #e9edf0; color: #52606d; }
+  .status-badge.no-high-risk { background: #e2f3e9; color: var(--success); }
+  .status-badge.monitoring { background: #e4f1ef; color: var(--primary-900); }
+  .status-badge.follow-up { background: #fff0cf; color: var(--warning); }
+
+  .high-risk-detail-header { margin-top: .2rem; }
+  .detail-title-row { align-items: flex-start; }
+  .detail-title-row h1 { margin-bottom: .35rem; }
+  .detail-title-row .status-badge { flex: 0 0 auto; padding: .5rem .7rem; }
+  .detail-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .detail-section-grid .card { display: grid; align-content: start; gap: .85rem; }
+  .detail-section-grid h2, .detail-section-grid p { margin-bottom: .2rem; }
+  .detail-wide-section { margin-top: .2rem; }
+  .tag-list { display: flex; flex-wrap: wrap; gap: .45rem; }
+  .risk-tag { padding: .4rem .62rem; border: 1px solid #d1dfdd; border-radius: 999px; background: #f3f8f7; color: var(--primary-900); font-size: .8rem; font-weight: 750; }
+  .risk-tag.alert-tag { border-color: #ead4a9; background: #fff7e7; color: var(--warning); }
+  .empty-tag { color: var(--muted); font-size: .875rem; }
+  .reason-box { display: grid; gap: .45rem; margin-top: .25rem; padding: .8rem .9rem; border-left: 4px solid var(--primary-500); border-radius: 8px; background: #f4f8f7; }
+  .reason-box strong { color: var(--primary-900); font-size: .86rem; }
+  .reason-box ul { display: grid; gap: .35rem; margin: 0; padding-left: 1.15rem; color: #42575a; font-size: .84rem; }
+  .evidence-table { min-width: 1380px; }
+  .evidence-table td { vertical-align: top; font-size: .82rem; }
+  .evidence-values { display: grid; gap: .18rem; }
+  .evidence-values small { margin: 0; }
+  #hrDetailContent { display: grid; gap: 1rem; }
+
+  @media (max-width: 1180px) {
+    .metric-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .alert-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .diagnosis-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .follow-up-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  @media (max-width: 860px) {
+    .high-risk-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .risk-panel-grid, .detail-section-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 560px) {
+    .high-risk-heading, .filter-heading, .filter-actions, .detail-title-row, .pagination-bar { align-items: stretch; flex-direction: column; }
+    .high-risk-filter-grid, .metric-card-grid, .follow-up-grid, .alert-summary-grid, .diagnosis-overview-grid { grid-template-columns: 1fr; }
+    .metric-card { min-height: 96px; }
+    .risk-bar { grid-template-columns: minmax(110px, 1fr) 1.2fr auto; gap: .45rem; }
+    .compact-select { width: 100%; }
+    .pagination-bar .button { width: 100%; }
+  }
+</style>

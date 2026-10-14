@@ -1,0 +1,217 @@
+<section id="page-risk-analytics" class="page">
+  <div class="analytics-view">
+    <div class="page-heading clinical-heading analytics-heading">
+      <div>
+        <p class="eyebrow">Population analytics</p>
+        <h1>Analitik Risiko Kehamilan</h1>
+        <p>Visualisasi tren, distribusi faktor risiko, diagnosis, alert klinis, dan variasi wilayah pada kehamilan.</p>
+        <p id="analyticsFreshness" class="freshness-note">Data terakhir diperbarui: sedang dimuat...</p>
+      </div>
+      <button class="button button-secondary" type="button" onclick="navigateTo('high-risk')">Buka monitoring operasional</button>
+    </div>
+
+    <div id="analyticsMessage" aria-live="polite"></div>
+
+    <form id="analyticsFilterForm" class="card analytics-filter-card">
+      <div class="filter-heading">
+        <div><p class="eyebrow">Filter analitik</p><h2>Scope kehamilan</h2></div>
+        <button class="text-button" type="button" onclick="resetRiskAnalyticsFilters()">Atur ulang</button>
+      </div>
+      <p class="analytics-scope-note">Periode memilih kehamilan dengan evidence ANC pada tanggal tersebut. Metrik “terkini” tetap memakai status canonical saat ini.</p>
+      <div class="analytics-filter-grid">
+        <label>Periode
+          <select id="analyticsPeriod">
+            <option value="30D">30 hari terakhir</option>
+            <option value="3M">3 bulan</option>
+            <option value="6M" selected>6 bulan</option>
+            <option value="12M">12 bulan</option>
+            <option value="CUSTOM">Custom</option>
+            <option value="ALL">Semua periode</option>
+          </select>
+        </label>
+        <label id="analyticsPeriodStartField" hidden>Tanggal mulai
+          <input id="analyticsPeriodStart" type="date">
+        </label>
+        <label id="analyticsPeriodEndField" hidden>Tanggal akhir
+          <input id="analyticsPeriodEnd" type="date">
+        </label>
+        <label>Status kehamilan
+          <select id="analyticsMonitoringStatus">
+            <option value="ALL">Semua</option>
+            <option value="ACTIVE_PREGNANCY" selected>Kehamilan Aktif</option>
+            <option value="OVER_42W_NO_OUTCOME">≥42 Minggu, Belum Ada Luaran</option>
+            <option value="NO_OUTCOME_DATING_UNKNOWN">Luaran Belum Tercatat, Dating Tidak Diketahui</option>
+            <option value="DELIVERED">Melahirkan</option>
+            <option value="ABORTION">Abortus</option>
+          </select>
+        </label>
+        <label>Status risiko
+          <select id="analyticsRiskStatus">
+            <option value="ALL">Semua</option>
+            <option value="URGENT">Perlu Evaluasi Segera</option>
+            <option value="HIGH_RISK">Risiko Tinggi</option>
+            <option value="CONFLICTING_EVIDENCE">Data Pemeriksaan Berbeda Antar Sumber</option>
+            <option value="NOT_ASSESSABLE">Belum Dapat Dinilai</option>
+            <option value="NO_HIGH_RISK_DETECTED">Tidak Terdeteksi Risiko Tinggi</option>
+          </select>
+        </label>
+        <label>Puskesmas
+          <select id="analyticsPuskesmas"><option value="">Semua Puskesmas</option></select>
+        </label>
+        <label>Desa
+          <select id="analyticsDesa"><option value="">Semua Desa</option></select>
+        </label>
+        <label>Faktor risiko
+          <select id="analyticsRiskFactor">
+            <option value="ALL">Semua faktor risiko</option>
+            <option value="AGE_LT20">Usia &lt;20</option>
+            <option value="AGE_GT35">Usia &gt;35</option>
+            <option value="SHORT_STATURE">Perawakan pendek</option>
+            <option value="KEK">KEK terkini</option>
+            <option value="ANEMIA">Anemia terkini</option>
+            <option value="HYPERTENSION">Hipertensi terkini</option>
+            <option value="SUSPECT_PREECLAMPSIA">Skrining Mengarah ke Preeklampsia</option>
+            <option value="HIV">HIV positif</option>
+            <option value="SYPHILIS">Sifilis positif</option>
+            <option value="HEPATITIS_B">Hepatitis B positif</option>
+            <option value="UNDERWEIGHT_EARLY_BMI">BMI awal &lt;18,5</option>
+            <option value="HIGH_PARITY">Paritas tinggi (&ge;4)</option>
+            <option value="SHORT_BIRTH_INTERVAL">Jarak kehamilan &lt;2 tahun</option>
+            <option value="PLACENTA_PREVIA_REPORTED">Plasenta previa</option>
+            <option value="BREECH_REPORTED">Presentasi sungsang</option>
+            <option value="OTHER_MALPRESENTATION_REPORTED">Malpresentasi lain</option>
+          </select>
+        </label>
+        <label>Diagnosis / kondisi obstetri
+          <select id="analyticsDiagnosis">
+            <option value="ALL">Semua diagnosis / kondisi</option>
+            <option value="GESTATIONAL_HYPERTENSION_REPORTED">Hipertensi gestasional</option>
+            <option value="PREECLAMPSIA_REPORTED">Preeklampsia</option>
+            <option value="SEVERE_PREECLAMPSIA_REPORTED">Preeklampsia berat</option>
+            <option value="ECLAMPSIA_REPORTED">Eklampsia</option>
+            <option value="DIABETES_IN_PREGNANCY_REPORTED">Diabetes dalam kehamilan</option>
+            <option value="MULTIPLE_PREGNANCY_REPORTED">Kehamilan ganda</option>
+            <option value="UTERINE_SCAR_REPORTED">Bekas luka uterus</option>
+            <option value="MALPRESENTATION_REPORTED">Malpresentasi pernah dilaporkan</option>
+          </select>
+        </label>
+        <label>Alert klinis
+          <select id="analyticsClinicalAlert">
+            <option value="ALL">Semua alert</option>
+            <option value="ABNORMAL_FHR">DJJ abnormal</option>
+            <option value="FHR_NOT_DETECTED">DJJ tidak terdeteksi</option>
+            <option value="FUNDAL_HEIGHT_MISMATCH">Tinggi fundus tidak sesuai usia kehamilan</option>
+            <option value="ABNORMAL_USG_SUSPECTED">Kecurigaan hasil USG abnormal</option>
+          </select>
+        </label>
+      </div>
+      <div class="filter-actions">
+        <span class="muted">Semua hitungan memakai <code>COUNT(DISTINCT pregnancy_key)</code> bila sumber dapat memiliki banyak row. Presentasi sungsang dan malpresentasi lain memakai evidence historis/ever, bukan presentasi janin terkini.</span>
+        <button id="analyticsApplyFilter" class="button button-primary" type="submit">Terapkan filter</button>
+      </div>
+    </form>
+
+    <div id="analyticsPageStatus" class="inline-state" aria-live="polite" hidden></div>
+
+    <section aria-labelledby="analyticsOverviewTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">Executive overview</p><h2 id="analyticsOverviewTitle">Status terkini dalam scope</h2></div>
+        <button class="button button-secondary" type="button" onclick="openAnalyticsDrillDown({})">Lihat BNBA sesuai filter</button>
+      </div>
+      <div id="analyticsOverviewState" class="module-state" hidden></div>
+      <div class="analytics-score-grid">
+        <button class="analytics-score primary" type="button" onclick="openAnalyticsDrillDown({})"><span>Kehamilan dalam scope</span><strong id="analyticsMetricTotal">—</strong><small id="analyticsMetricScope">kehamilan</small></button>
+        <button class="analytics-score high" type="button" onclick="openAnalyticsDrillDown({ riskStatus: 'HIGH_RISK' })"><span>Risiko Tinggi</span><strong id="analyticsMetricHighRisk">—</strong><small id="analyticsMetricHighRiskPct">Belum dapat dihitung</small></button>
+        <button class="analytics-score urgent" type="button" onclick="openAnalyticsDrillDown({ riskStatus: 'URGENT' })"><span>Perlu Evaluasi Segera</span><strong id="analyticsMetricUrgent">—</strong><small>status terkini</small></button>
+        <button class="analytics-score pe" type="button" onclick="openAnalyticsDrillDown({ riskFactor: 'SUSPECT_PREECLAMPSIA' })"><span>Skrining Mengarah ke Preeklampsia Terkini</span><strong id="analyticsMetricSuspectPe">—</strong><small>Skrining, bukan diagnosis</small></button>
+        <button class="analytics-score alert-score" type="button" onclick="openAnalyticsDrillDown({ clinicalAlert: 'ANY' })"><span>Kehamilan dengan ≥1 Alert Klinis</span><strong id="analyticsMetricAlerts">—</strong><small>terpisah dari core high-risk</small></button>
+        <button class="analytics-score unknown" type="button" onclick="openAnalyticsDrillDown({ riskStatus: 'NOT_ASSESSABLE' })"><span>Belum Dapat Dinilai</span><strong id="analyticsMetricNotAssessed">—</strong><small>missing bukan normal</small></button>
+      </div>
+    </section>
+
+    <section class="card analytics-panel analytics-wide" aria-labelledby="analyticsTrendTitle">
+      <div class="chart-heading">
+        <div><p class="eyebrow">Tanggal kunjungan ANC / clinical evidence date</p><h2 id="analyticsTrendTitle">Tren Deteksi Risiko</h2><p class="muted">Jumlah kehamilan dengan evidence risiko berdasarkan tanggal evidence klinis. Bukan prevalensi historis.</p></div>
+      </div>
+      <div id="analyticsTrendState" class="module-state" hidden></div>
+      <div id="analyticsRiskTrend" class="line-chart" role="img" aria-label="Tren deteksi risiko per bulan"></div>
+    </section>
+
+    <div class="analytics-two-column analytics-priority-row">
+      <section class="card analytics-panel" aria-labelledby="analyticsFactorsTitle">
+        <div><p class="eyebrow">Status canonical terkini</p><h2 id="analyticsFactorsTitle">Distribusi Faktor Risiko Terkini</h2><p class="muted">N dan % dari seluruh kehamilan dalam scope; faktor dapat saling tumpang tindih.</p></div>
+        <div id="analyticsFactorState" class="module-state" hidden></div>
+        <div id="analyticsFactorChart" class="analytics-bars"></div>
+      </section>
+      <section class="card analytics-panel" aria-labelledby="analyticsRegionalTitle">
+        <div class="chart-heading">
+          <div><p class="eyebrow">Lokasi ANC terbaru</p><h2 id="analyticsRegionalTitle">Proporsi Kehamilan Risiko Tinggi menurut Puskesmas</h2></div>
+          <div class="segmented-control" aria-label="Metrik wilayah">
+            <button id="analyticsRegionPct" class="active" type="button" onclick="setAnalyticsRegionalMetric('PERCENT')">Persentase</button>
+            <button id="analyticsRegionCount" type="button" onclick="setAnalyticsRegionalMetric('COUNT')">Jumlah</button>
+          </div>
+        </div>
+        <div id="analyticsRegionalState" class="module-state" hidden></div>
+        <div id="analyticsRegionalChart" class="analytics-bars"></div>
+      </section>
+    </div>
+
+    <section class="card analytics-panel analytics-wide" aria-labelledby="analyticsFactorTrendTitle">
+      <div class="chart-heading">
+        <div><p class="eyebrow">Tanggal kunjungan ANC / clinical evidence date</p><h2 id="analyticsFactorTrendTitle">Tren Faktor Risiko</h2><p class="muted">Kehamilan unik per bulan. Tampilkan maksimal empat seri agar pola tetap terbaca.</p></div>
+        <div class="factor-toggle-list" aria-label="Faktor yang ditampilkan">
+          <label><input type="checkbox" value="anemia" checked> Anemia</label>
+          <label><input type="checkbox" value="hypertension" checked> Hipertensi</label>
+          <label><input type="checkbox" value="kek" checked> KEK</label>
+          <label><input type="checkbox" value="suspect_preeclampsia" checked> Suspect PE</label>
+        </div>
+      </div>
+      <div id="analyticsFactorTrendState" class="module-state" hidden></div>
+      <div id="analyticsFactorTrend" class="line-chart" role="img" aria-label="Tren faktor risiko per bulan"></div>
+    </section>
+
+    <div class="analytics-two-column">
+      <section class="card analytics-panel" aria-labelledby="analyticsDynamicTitle">
+        <div><p class="eyebrow">Risiko dinamis</p><h2 id="analyticsDynamicTitle">Risiko Dinamis: Pernah Terdeteksi vs Pemeriksaan Terbaru</h2><p class="muted">Tooltip pemeriksaan terbaru memakai denominator kehamilan yang dapat dinilai.</p></div>
+        <div id="analyticsDynamicState" class="module-state" hidden></div>
+        <div id="analyticsDynamicChart" class="grouped-bars"></div>
+      </section>
+      <section class="card analytics-panel" aria-labelledby="analyticsDiagnosisTitle">
+        <div><p class="eyebrow">Pernah dilaporkan</p><h2 id="analyticsDiagnosisTitle">Diagnosis &amp; Kondisi Obstetri</h2><p class="muted">Satu kehamilan dapat memiliki lebih dari satu kondisi.</p></div>
+        <div id="analyticsDiagnosisState" class="module-state" hidden></div>
+        <div id="analyticsDiagnosisChart" class="analytics-bars"></div>
+      </section>
+    </div>
+
+    <section class="card analytics-panel analytics-wide" aria-labelledby="analyticsHeatmapTitle">
+      <div><p class="eyebrow">Lokasi ANC terbaru</p><h2 id="analyticsHeatmapTitle">Pola Faktor Risiko menurut Puskesmas</h2><p class="muted">Warna menunjukkan % kehamilan dalam scope; arahkan pointer untuk melihat N dan denominator, klik untuk BNBA.</p></div>
+      <div id="analyticsHeatmapState" class="module-state" hidden></div>
+      <div id="analyticsHeatmap" class="heatmap-wrap"></div>
+    </section>
+
+    <section class="card analytics-panel analytics-wide" aria-labelledby="analyticsPeTitle">
+        <div><p class="eyebrow">Alur skrining</p><h2 id="analyticsPeTitle">Alur Skrining Preeklampsia</h2><p class="muted">Skrining Mengarah ke Preeklampsia adalah evidence hipertensi dan proteinuria positif pada tanggal klinis yang sama; bukan diagnosis terkonfirmasi.</p></div>
+      <div id="analyticsPeState" class="module-state" hidden></div>
+      <div id="analyticsPeFlow" class="pe-flow"></div>
+    </section>
+
+    <div class="analytics-two-column">
+      <section class="card analytics-panel" aria-labelledby="analyticsAlertsTitle">
+        <div><p class="eyebrow">Terpisah dari core high-risk</p><h2 id="analyticsAlertsTitle">Distribusi Alert Klinis</h2><p class="muted">Satu kehamilan dapat memiliki lebih dari satu alert klinis.</p></div>
+        <div id="analyticsAlertsState" class="module-state" hidden></div>
+        <div id="analyticsAlertsChart" class="analytics-bars"></div>
+      </section>
+      <section class="card analytics-panel" aria-labelledby="analyticsCoverageTitle">
+        <div><p class="eyebrow">Tanggal kunjungan ANC</p><h2 id="analyticsCoverageTitle">Cakupan Penilaian Faktor Risiko</h2><p class="muted">% kehamilan dengan evidence yang dapat dinilai pada periode terpilih; data yang hilang tidak dianggap normal.</p></div>
+        <div id="analyticsCoverageState" class="module-state" hidden></div>
+        <div id="analyticsCoverageChart" class="analytics-bars"></div>
+      </section>
+    </div>
+
+    <section class="card analytics-panel analytics-wide" aria-labelledby="analyticsBacklogTitle">
+      <div><p class="eyebrow">Backlog operasional terkini</p><h2 id="analyticsBacklogTitle">Tindak Lanjut Operasional</h2><p class="muted">Seluruh status kehamilan pada periode dan lokasi terpilih; filter status risiko, faktor, diagnosis, dan alert tidak diterapkan. Bukan tren historis atau faktor risiko inti.</p></div>
+      <div id="analyticsBacklogState" class="module-state" hidden></div>
+      <div id="analyticsBacklog" class="backlog-grid"></div>
+    </section>
+  </div>
+</section>

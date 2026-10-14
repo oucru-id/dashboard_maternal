@@ -1,0 +1,1112 @@
+<script>
+  const HighRiskState = {
+    loaded: false,
+    loading: false,
+    loadingPromise: null,
+    locations: [],
+    dashboard: null,
+    filters: null,
+    listFilters: null,
+    listPage: 1,
+    listResult: null,
+    selectedPregnancyKey: null
+  };
+
+  const highRiskFilterForm = document.getElementById('highRiskFilterForm');
+  const highRiskPuskesmas = document.getElementById('hrPuskesmas');
+  if (highRiskFilterForm) highRiskFilterForm.addEventListener('submit', handleHighRiskFilterSubmit);
+  if (highRiskPuskesmas) highRiskPuskesmas.addEventListener('change', updateHighRiskDesaOptions);
+
+  function resetHighRiskState() {
+    HighRiskState.loaded = false;
+    HighRiskState.loading = false;
+    HighRiskState.loadingPromise = null;
+    HighRiskState.dashboard = null;
+    HighRiskState.filters = null;
+    HighRiskState.listFilters = null;
+    HighRiskState.listPage = 1;
+    HighRiskState.listResult = null;
+    HighRiskState.selectedPregnancyKey = null;
+  }
+
+  async function initializeHighRiskPage() {
+    if (HighRiskState.loaded || !AppState.token) return;
+    if (HighRiskState.loadingPromise) return HighRiskState.loadingPromise;
+    HighRiskState.loading = true;
+    HighRiskState.loadingPromise = (async function() {
+      setInlineState('highRiskDashboardStatus', 'Memuat dashboard risiko tinggi...', 'Agregasi dihitung di BigQuery.', 'loading');
+      try {
+        const results = await Promise.all([
+          callServer('getHighRiskLocationOptions', AppState.token),
+          callServer('getHighRiskDashboard', AppState.token, readHighRiskFilters())
+        ]);
+        HighRiskState.locations = results[0] || [];
+        populateHighRiskLocationOptions();
+        applyHighRiskDashboardResult(results[1]);
+        HighRiskState.loaded = true;
+      } catch (error) {
+        handleHighRiskError(error, 'highRiskDashboardStatus');
+      } finally {
+        HighRiskState.loading = false;
+        HighRiskState.loadingPromise = null;
+      }
+    })();
+    return HighRiskState.loadingPromise;
+  }
+
+  function readHighRiskFilters() {
+    return {
+      monitoringStatus: document.getElementById('hrMonitoringStatus').value,
+      riskStatus: document.getElementById('hrRiskStatus').value,
+      puskesmas: document.getElementById('hrPuskesmas').value || null,
+      desa: document.getElementById('hrDesa').value || null,
+      riskFactor: document.getElementById('hrRiskFactor').value,
+      clinicalAlert: document.getElementById('hrClinicalAlert').value,
+      followUp: document.getElementById('hrFollowUp').value
+    };
+  }
+
+  async function handleHighRiskFilterSubmit(event) {
+    event.preventDefault();
+    await loadHighRiskDashboard();
+  }
+
+  async function loadHighRiskDashboard() {
+    const button = document.getElementById('hrApplyFilter');
+    if (button) button.disabled = true;
+    setInlineState('highRiskDashboardStatus', 'Memperbarui dashboard...', 'Filter diterapkan di server.', 'loading');
+    try {
+      const result = await callServer('getHighRiskDashboard', AppState.token, readHighRiskFilters());
+      applyHighRiskDashboardResult(result);
+      HighRiskState.loaded = true;
+    } catch (error) {
+      handleHighRiskError(error, 'highRiskDashboardStatus');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function applyHighRiskDashboardResult(result) {
+    HighRiskState.dashboard = result || { summary: {}, locations: [] };
+    HighRiskState.filters = result && result.filters ? result.filters : readHighRiskFilters();
+    renderHighRiskSummary(HighRiskState.dashboard.summary || {});
+    renderHighRiskLocationTable(HighRiskState.dashboard.locations || []);
+    renderHighRiskFreshness(HighRiskState.dashboard);
+    setInlineState('highRiskDashboardStatus', '', '', '');
+  }
+
+  function populateHighRiskLocationOptions() {
+    const select = document.getElementById('hrPuskesmas');
+    if (!select) return;
+    const current = select.value;
+    replaceSelectOptions(select, 'Semua Puskesmas', uniqueHighRiskValues(HighRiskState.locations, 'puskesmas'));
+    if (Array.from(select.options).some(function(option) { return option.value === current; })) select.value = current;
+    updateHighRiskDesaOptions();
+  }
+
+  function updateHighRiskDesaOptions() {
+    const puskesmas = document.getElementById('hrPuskesmas').value;
+    const select = document.getElementById('hrDesa');
+    const current = select.value;
+    const rows = (HighRiskState.locations || []).filter(function(row) {
+      return !puskesmas || row.puskesmas === puskesmas;
+    });
+    replaceSelectOptions(select, 'Semua Desa', uniqueHighRiskValues(rows, 'desa'));
+    if (Array.from(select.options).some(function(option) { return option.value === current; })) select.value = current;
+  }
+
+  function replaceSelectOptions(select, allLabel, values) {
+    select.replaceChildren();
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = allLabel;
+    select.appendChild(all);
+    values.forEach(function(value) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = highRiskLocationLabel(value);
+      select.appendChild(option);
+    });
+  }
+
+  function uniqueHighRiskValues(rows, field) {
+    return Array.from(new Set((rows || []).map(function(row) { return row[field]; }).filter(Boolean))).sort(function(a, b) {
+      return String(a).localeCompare(String(b), 'id');
+    });
+  }
+
+  function resetHighRiskFilters() {
+    document.getElementById('hrMonitoringStatus').value = 'ACTIVE_PREGNANCY';
+    document.getElementById('hrRiskStatus').value = 'ALL';
+    document.getElementById('hrPuskesmas').value = '';
+    updateHighRiskDesaOptions();
+    document.getElementById('hrDesa').value = '';
+    document.getElementById('hrRiskFactor').value = 'ALL';
+    document.getElementById('hrClinicalAlert').value = 'ALL';
+    document.getElementById('hrFollowUp').value = 'ALL';
+    loadHighRiskDashboard();
+  }
+
+  function applyHighRiskMonitoringStatus(status) {
+    document.getElementById('hrMonitoringStatus').value = status;
+    loadHighRiskDashboard();
+  }
+
+  function applyHighRiskFollowUp(followUp) {
+    document.getElementById('hrFollowUp').value = followUp;
+    loadHighRiskDashboard();
+  }
+
+  function renderHighRiskSummary(summary) {
+    setHighRiskCount('hrMetricTotal', summary.selected_total);
+    setHighRiskCount('hrMetricUrgent', summary.urgent);
+    setHighRiskCount('hrMetricHigh', summary.high_risk);
+    setHighRiskCount('hrMetricConflict', summary.conflicting);
+    setHighRiskCount('hrMetricUnknown', summary.not_assessable);
+    setHighRiskCount('hrMetricNormal', summary.no_high_risk);
+    setHighRiskCount('hrMetricAlerts', summary.clinical_alerts);
+    setHighRiskCount('hrMetricOver42', summary.over_42w_no_outcome);
+    setHighRiskCount('hrMetricDatingUnknown', summary.dating_unknown);
+    setHighRiskCount('hrMetricPreeclampsiaReassessment', summary.preeclampsia_reassessment_needed);
+    setTextContent('hrSelectedLabel', monitoringStatusLabel((HighRiskState.filters || {}).monitoringStatus));
+    renderHighRiskBars('hrPersistentChart', [
+      ['Usia >35 tahun', summary.risk_age_gt35],
+      ['Usia <20 tahun', summary.risk_age_lt20],
+      ['Tinggi badan <145 cm', summary.risk_short_stature],
+      ['BMI awal <18,5', summary.risk_underweight_early_bmi],
+      ['Paritas tinggi (\u22654)', summary.risk_high_parity],
+      ['Jarak kehamilan <2 tahun', summary.risk_short_birth_interval],
+      ['HIV positif', summary.risk_hiv],
+      ['Sifilis positif', summary.risk_syphilis],
+      ['Hepatitis B positif', summary.risk_hepatitis_b]
+    ]);
+    renderHighRiskDynamic(summary);
+    renderDiagnosisOverview(summary);
+    renderHighRiskAlerts(summary);
+  }
+
+  function setHighRiskCount(id, value) {
+    setTextContent(id, new Intl.NumberFormat('id-ID').format(Number(value) || 0));
+  }
+
+  function renderHighRiskBars(containerId, values) {
+    const container = document.getElementById(containerId);
+    container.replaceChildren();
+    const maximum = Math.max.apply(null, values.map(function(item) { return Number(item[1]) || 0; }).concat([1]));
+    values.forEach(function(item) {
+      const row = document.createElement('div');
+      row.className = 'risk-bar';
+      const label = document.createElement('span');
+      label.className = 'risk-bar-label';
+      label.textContent = item[0];
+      const track = document.createElement('div');
+      track.className = 'risk-bar-track';
+      const fill = document.createElement('div');
+      fill.className = 'risk-bar-fill';
+      fill.style.width = ((Number(item[1]) || 0) / maximum * 100) + '%';
+      track.appendChild(fill);
+      const number = document.createElement('strong');
+      number.className = 'risk-bar-value';
+      number.textContent = new Intl.NumberFormat('id-ID').format(Number(item[1]) || 0);
+      row.append(label, track, number);
+      container.appendChild(row);
+    });
+  }
+
+  function renderHighRiskDynamic(summary) {
+    const body = document.getElementById('hrDynamicBody');
+    body.replaceChildren();
+    [
+      ['Anemia', summary.ever_anemia, summary.current_anemia, summary.anemia_assessed],
+      ['Hipertensi', summary.ever_hypertension, summary.current_hypertension, summary.hypertension_assessed],
+      ['KEK', summary.ever_kek, summary.current_kek, summary.kek_assessed],
+      ['Skrining Mengarah ke Preeklampsia', summary.ever_suspect_preeclampsia, summary.current_suspect_preeclampsia, summary.suspect_preeclampsia_assessed]
+    ].forEach(function(item) {
+      const row = document.createElement('tr');
+      row.appendChild(hrTextCell(item[0]));
+      row.appendChild(hrNumberCell(item[1], 'comparison-number'));
+      row.appendChild(hrNumberCell(item[2], 'comparison-number current'));
+      row.appendChild(hrNumberCell(item[3], 'comparison-number assessed'));
+      body.appendChild(row);
+    });
+  }
+
+  function renderDiagnosisOverview(summary) {
+    const container = document.getElementById('hrDiagnosisOverview');
+    container.replaceChildren();
+    [
+      ['Hipertensi gestasional', summary.diagnosis_gestational_hypertension],
+      ['Preeklampsia', summary.diagnosis_preeclampsia],
+      ['Preeklampsia berat', summary.diagnosis_severe_preeclampsia],
+      ['Eklampsia', summary.diagnosis_eclampsia],
+      ['Diabetes dalam kehamilan', summary.diagnosis_diabetes_in_pregnancy],
+      ['Kehamilan ganda', summary.condition_multiple_pregnancy],
+      ['Bekas luka uterus', summary.condition_uterine_scar],
+      ['Plasenta previa', summary.risk_placenta_previa_reported],
+      ['Presentasi sungsang', summary.risk_breech_reported],
+      ['Malpresentasi lain', summary.risk_other_malpresentation_reported]
+    ].forEach(function(item) {
+      const card = document.createElement('div');
+      card.className = 'diagnosis-overview-item';
+      const label = document.createElement('span');
+      label.textContent = item[0];
+      const count = document.createElement('strong');
+      count.textContent = new Intl.NumberFormat('id-ID').format(Number(item[1]) || 0);
+      card.append(label, count);
+      container.appendChild(card);
+    });
+  }
+
+  function renderHighRiskFreshness(result) {
+    const generated = result && result.generatedAt ? new Date(result.generatedAt) : null;
+    const generatedText = generated && !Number.isNaN(generated.getTime())
+      ? new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
+      }).format(generated) + ' WITA'
+      : 'belum tersedia';
+    const latest = result && result.summary ? result.summary.latest_clinical_record_date : null;
+    setTextContent(
+      'hrFreshness',
+      'Dashboard dihitung: ' + generatedText + ' · Evidence klinis terbaru dalam scope: ' + formatDate(latest)
+    );
+  }
+
+  function renderHighRiskAlerts(summary) {
+    const container = document.getElementById('hrAlertChart');
+    container.replaceChildren();
+    [
+      ['DJJ Abnormal', summary.alert_abnormal_fhr],
+      ['DJJ Tidak Terdeteksi', summary.alert_fhr_not_detected],
+      ['Tinggi Fundus Tidak Sesuai Usia Kehamilan', summary.alert_fundal_mismatch],
+      ['Kecurigaan Hasil USG Abnormal', summary.alert_usg_abnormal]
+    ].forEach(function(item) {
+      const card = document.createElement('div');
+      card.className = 'alert-summary-item';
+      const label = document.createElement('span');
+      label.textContent = item[0];
+      const number = document.createElement('strong');
+      number.textContent = new Intl.NumberFormat('id-ID').format(Number(item[1]) || 0);
+      card.append(label, number);
+      container.appendChild(card);
+    });
+  }
+
+  function renderHighRiskLocationTable(rows) {
+    const filters = HighRiskState.filters || readHighRiskFilters();
+    const byDesa = !!filters.puskesmas;
+    setTextContent('hrLocationTitle', byDesa ? 'Ringkasan Desa · ' + highRiskLocationLabel(filters.puskesmas) : 'Ringkasan Puskesmas');
+    setTextContent('hrLocationColumn', byDesa ? 'Desa' : 'Lokasi ANC terbaru');
+    setTextContent('hrLocationHint', byDesa
+      ? 'Desa dalam lokasi ANC terbaru terpilih. Pilih Desa untuk membuka BNBA.'
+      : 'Dikelompokkan berdasarkan lokasi ANC terbaru. Pilih Puskesmas untuk membuka ringkasan Desa.');
+    const grouped = {};
+    (rows || []).forEach(function(row) {
+      const key = byDesa ? row.desa : row.puskesmas;
+      if (!grouped[key]) grouped[key] = { name: key };
+      ['selected_total', 'urgent', 'high_risk', 'conflicting', 'not_assessable', 'clinical_alerts',
+        'preeclampsia_reassessment_needed', 'over_42w_no_outcome'].forEach(function(field) {
+        grouped[key][field] = (Number(grouped[key][field]) || 0) + (Number(row[field]) || 0);
+      });
+    });
+    const values = Object.keys(grouped).map(function(key) { return grouped[key]; }).filter(function(item) {
+      return Number(item.selected_total) > 0;
+    }).sort(function(a, b) {
+      return b.urgent - a.urgent || b.high_risk - a.high_risk || b.conflicting - a.conflicting ||
+        b.preeclampsia_reassessment_needed - a.preeclampsia_reassessment_needed ||
+        b.selected_total - a.selected_total || String(a.name).localeCompare(String(b.name), 'id');
+    });
+    const body = document.getElementById('hrLocationBody');
+    body.replaceChildren();
+    if (!values.length) {
+      const row = document.createElement('tr');
+      const cell = hrTextCell('Tidak ada lokasi pada filter ini.');
+      cell.colSpan = 10;
+      cell.className = 'empty-state';
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    values.forEach(function(item) {
+      const row = document.createElement('tr');
+      const name = hrTextCell(highRiskLocationLabel(item.name));
+      name.className = 'location-name' + (/VERIFIKASI|BELUM TERPETAKAN/.test(item.name) ? ' location-warning' : '');
+      row.appendChild(name);
+      row.appendChild(hrNumberCell(item.selected_total));
+      row.appendChild(hrCountPercentCell(item.high_risk, item.selected_total));
+      row.appendChild(hrCountPercentCell(item.urgent, item.selected_total));
+      row.appendChild(hrCountPercentCell(item.conflicting, item.selected_total));
+      row.appendChild(hrCountPercentCell(item.not_assessable, item.selected_total));
+      row.appendChild(hrCountPercentCell(item.clinical_alerts, item.selected_total));
+      row.appendChild(hrCountPercentCell(item.preeclampsia_reassessment_needed, item.selected_total));
+      row.appendChild(hrNumberCell(item.over_42w_no_outcome));
+      const actionCell = document.createElement('td');
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'text-button';
+      action.textContent = byDesa ? 'Buka BNBA' : 'Buka Desa';
+      action.addEventListener('click', function() {
+        if (byDesa) openHighRiskVillage(item.name);
+        else drillDownHighRiskPuskesmas(item.name);
+      });
+      actionCell.appendChild(action);
+      row.appendChild(actionCell);
+      body.appendChild(row);
+    });
+  }
+
+  function drillDownHighRiskPuskesmas(name) {
+    document.getElementById('hrPuskesmas').value = name;
+    updateHighRiskDesaOptions();
+    document.getElementById('hrDesa').value = '';
+    loadHighRiskDashboard();
+  }
+
+  function openHighRiskVillage(name) {
+    document.getElementById('hrDesa').value = name;
+    openHighRiskList();
+  }
+
+  async function openHighRiskList() {
+    HighRiskState.listFilters = readHighRiskFilters();
+    HighRiskState.listPage = 1;
+    showHighRiskView('list');
+    await loadHighRiskList();
+  }
+
+  async function loadHighRiskList() {
+    const sort = document.getElementById('hrListSort').value;
+    setInlineState('hrListStatus', 'Memuat BNBA...', 'Data diambil per halaman dari BigQuery.', 'loading');
+    document.getElementById('hrListBody').replaceChildren();
+    renderHighRiskListScope();
+    try {
+      const result = await callServer(
+        'getHighRiskPregnancies', AppState.token, HighRiskState.listFilters,
+        HighRiskState.listPage, 25, sort
+      );
+      HighRiskState.listResult = result;
+      renderHighRiskList(result);
+    } catch (error) {
+      handleHighRiskError(error, 'hrListStatus');
+    }
+  }
+
+  function renderHighRiskListScope() {
+    const f = HighRiskState.listFilters || {};
+    const parts = [monitoringStatusLabel(f.monitoringStatus)];
+    if (f.puskesmas) parts.push(highRiskLocationLabel(f.puskesmas));
+    if (f.desa) parts.push(highRiskLocationLabel(f.desa));
+    if (f.riskStatus && f.riskStatus !== 'ALL') parts.push(riskStatusLabel(f.riskStatus));
+    if (f.riskFactor && f.riskFactor !== 'ALL') parts.push(riskFactorLabel(f.riskFactor));
+    if (f.clinicalAlert === 'ANY') parts.push('≥1 Alert Klinis');
+    else if (f.clinicalAlert && f.clinicalAlert !== 'ALL') parts.push(alertCodeLabel(f.clinicalAlert));
+    if (f.followUp === 'PREECLAMPSIA_REASSESSMENT') parts.push('Perlu Penilaian Ulang Preeklampsia');
+    if (f.evidencePeriod && f.evidencePeriod !== 'ALL') parts.push('Evidence ' + highRiskEvidencePeriodLabel(f));
+    setTextContent('hrListTitle', f.desa ? 'BNBA · ' + highRiskLocationLabel(f.desa) : 'Daftar kehamilan');
+    setTextContent('hrListScope', parts.join(' · '));
+  }
+
+  function highRiskEvidencePeriodLabel(filters) {
+    const f = filters || {};
+    const labels = { '30D': '30 hari terakhir', '3M': '3 bulan', '6M': '6 bulan', '12M': '12 bulan' };
+    if (f.evidencePeriod === 'CUSTOM') return formatDate(f.periodStart) + ' s.d. ' + formatDate(f.periodEnd);
+    return labels[f.evidencePeriod] || 'semua periode';
+  }
+
+  function renderHighRiskList(result) {
+    const rows = result && result.rows ? result.rows : [];
+    const body = document.getElementById('hrListBody');
+    body.replaceChildren();
+    if (!rows.length) {
+      setInlineState('hrListStatus', 'Tidak ada kehamilan pada filter ini.', 'Ubah filter atau kembali ke ringkasan.', 'empty');
+    } else {
+      setInlineState('hrListStatus', result.totalRows + ' kehamilan ditemukan.', 'Identitas sensitif ditampilkan dalam bentuk tersamarkan.', 'success');
+    }
+    rows.forEach(function(item) {
+      const row = document.createElement('tr');
+      const person = document.createElement('td');
+      person.className = 'person-cell';
+      const name = document.createElement('strong');
+      name.textContent = item.nama_pasien || 'Nama tidak tersedia';
+      const identity = document.createElement('small');
+      identity.textContent = 'NIK ' + (item.nik_masked || '-') + (isPresent(item.maternal_age_years) ? ' · Usia ' + item.maternal_age_years + ' th' : '');
+      const keys = document.createElement('small');
+      keys.textContent = 'patient_key: ' + (item.patient_key || '-') + ' · pregnancy_key: ' + (item.pregnancy_key || '-');
+      person.append(name, identity, keys);
+      row.appendChild(person);
+      row.appendChild(hrStackCell(['HPHT ' + formatDate(item.canonical_hpht), 'HPL ' + formatDate(item.canonical_hpl)]));
+      row.appendChild(hrStackCell([isPresent(item.current_ga_weeks) ? item.current_ga_weeks + ' minggu' : 'GA belum dapat ditentukan', 'ANC ' + formatDate(item.last_anc_date)]));
+      row.appendChild(hrBadgeCell(monitoringStatusLabel(item.pregnancy_monitoring_status), monitoringBadgeClass(item.pregnancy_monitoring_status)));
+      row.appendChild(hrBadgeCell(riskStatusLabel(item.current_risk_assessment_status), riskBadgeClass(item.current_risk_assessment_status)));
+      row.appendChild(hrTextCell(hrRiskText(item.current_risk_factors, item.current_risk_factors_text, item.current_risk_assessment_status)));
+      row.appendChild(hrTextCell(hrRiskText(item.ever_risk_factors, item.ever_risk_factors_text)));
+      row.appendChild(hrTextCell(diagnosisConditionText(item)));
+      row.appendChild(hrStackCell([
+        'Evidence risiko ' + formatDate(item.latest_relevant_risk_evidence_date),
+        'ANC terakhir ' + formatDate(item.last_anc_date)
+      ]));
+      row.appendChild(hrTextCell(item.current_suspect_preeclampsia_reassessment_needed_flag === true
+        ? 'Perlu Penilaian Ulang Preeklampsia'
+        : 'Tidak ada flag tindak lanjut ini'));
+      row.appendChild(hrTextCell(item.current_clinical_alert ? hrAlertText(item.current_clinical_alerts_text) : 'Tidak ada alert klinis terkini'));
+      row.appendChild(hrStackCell([
+        highRiskLocationLabel(item.puskesmas_group),
+        highRiskLocationLabel(item.desa_group),
+        item.has_phone_contact === true ? 'Kontak tersedia' : 'Kontak belum tersedia'
+      ]));
+      const actionCell = document.createElement('td');
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'text-button';
+      action.textContent = 'Buka detail';
+      action.addEventListener('click', function() { openHighRiskDetail(item.pregnancy_key); });
+      actionCell.appendChild(action);
+      row.appendChild(actionCell);
+      body.appendChild(row);
+    });
+    const totalPages = result.totalPages || 0;
+    setTextContent('hrPageLabel', totalPages ? 'Halaman ' + result.page + ' dari ' + totalPages : 'Halaman 0');
+    document.getElementById('hrPreviousPage').disabled = !totalPages || result.page <= 1;
+    document.getElementById('hrNextPage').disabled = !totalPages || result.page >= totalPages;
+  }
+
+  function changeHighRiskPage(delta) {
+    const result = HighRiskState.listResult || {};
+    const target = HighRiskState.listPage + delta;
+    if (target < 1 || (result.totalPages && target > result.totalPages)) return;
+    HighRiskState.listPage = target;
+    loadHighRiskList();
+  }
+
+  function changeHighRiskSort() {
+    HighRiskState.listPage = 1;
+    loadHighRiskList();
+  }
+
+  async function openHighRiskDetail(pregnancyKey) {
+    HighRiskState.selectedPregnancyKey = pregnancyKey;
+    showHighRiskView('detail');
+    document.getElementById('hrDetailContent').hidden = true;
+    setInlineState('hrDetailStatus', 'Memuat detail pregnancy...', 'Risiko, evidence, dan timeline sedang diambil.', 'loading');
+    try {
+      const detail = await callServer('getHighRiskPregnancyDetail', AppState.token, pregnancyKey);
+      if (!detail) throw new Error('Kehamilan tidak ditemukan.');
+      const requests = [
+        callServer('getTimeline', AppState.token, pregnancyKey),
+        callServer('getHighRiskEvidence', AppState.token, pregnancyKey)
+      ];
+      const related = await Promise.allSettled(requests);
+      const authenticationFailure = related.find(function(result) {
+        return result.status === 'rejected' && isAuthenticationError(
+          result.reason && result.reason.message ? result.reason.message : String(result.reason || '')
+        );
+      });
+      if (authenticationFailure) throw authenticationFailure.reason;
+      const timeline = related[0].status === 'fulfilled' ? (related[0].value || []) : [];
+      const evidence = related[1].status === 'fulfilled' ? (related[1].value || []) : [];
+      renderHighRiskDetail(detail, timeline, evidence);
+      document.getElementById('hrDetailContent').hidden = false;
+      const failures = [];
+      if (related[0].status === 'rejected') failures.push('riwayat klinis');
+      if (related[1].status === 'rejected') failures.push('evidence risiko');
+      if (failures.length) {
+        setInlineState(
+          'hrDetailStatus',
+          'Detail utama ditampilkan, tetapi sebagian data gagal dimuat.',
+          'Panel yang gagal: ' + failures.join(' dan ') + '. Periksa operasi terkait di Executions / Cloud Logging.',
+          'warning'
+        );
+      } else {
+        setInlineState('hrDetailStatus', '', '', '');
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error || '');
+      if (isAuthenticationError(message)) {
+        handleHighRiskError(error, 'hrDetailStatus');
+      } else if (/kehamilan tidak ditemukan/i.test(message)) {
+        setInlineState('hrDetailStatus', 'Kehamilan tidak ditemukan.', 'Kembali ke BNBA dan muat ulang daftar.', 'empty');
+      } else {
+        setInlineState(
+          'hrDetailStatus',
+          'Gagal mengambil detail utama kehamilan.',
+          'Periksa operation getHighRiskPregnancyDetail di Executions / Cloud Logging.',
+          'error'
+        );
+      }
+    }
+  }
+
+  function renderHighRiskDetail(detail, timeline, evidence) {
+    setTextContent('hrDetailName', detail.patient_name || 'Nama tidak tersedia');
+    setTextContent('hrDetailIdentity', 'NIK ' + (detail.nik_masked || '-') + (detail.phone_masked ? ' · Telepon ' + detail.phone_masked : ''));
+    const badge = document.getElementById('hrDetailRiskBadge');
+    badge.textContent = riskStatusLabel(detail.current_risk_assessment_status);
+    badge.className = 'status-badge ' + riskBadgeClass(detail.current_risk_assessment_status);
+
+    const identity = document.getElementById('hrDetailIdentityFacts');
+    identity.replaceChildren();
+    appendFact(identity, 'Tanggal lahir', formatDate(detail.patient_birth_date));
+    appendFact(identity, 'patient_key', detail.patient_key || '-');
+    appendFact(identity, 'pregnancy_key', detail.pregnancy_key || '-');
+    appendFact(identity, 'Puskesmas', highRiskLocationLabel(detail.puskesmas_group));
+    appendFact(identity, 'Desa', highRiskLocationLabel(detail.desa_group));
+    appendFact(identity, 'Lokasi evidence terbaru', formatDate(detail.latest_location_date));
+
+    const pregnancy = document.getElementById('hrPregnancyFacts');
+    pregnancy.replaceChildren();
+    appendFact(pregnancy, 'HPHT', formatDate(detail.canonical_hpht));
+    appendFact(pregnancy, 'HPL', formatDate(detail.canonical_hpl));
+    appendFact(pregnancy, 'Usia kehamilan saat ini', isPresent(detail.current_ga_weeks) ? detail.current_ga_weeks + ' minggu' : 'Tidak dapat ditentukan');
+    appendFact(pregnancy, 'ANC pertama', formatDate(detail.first_anc_date));
+    appendFact(pregnancy, 'ANC terakhir', formatDate(detail.last_anc_date));
+    appendFact(pregnancy, 'Status kehamilan', monitoringStatusLabel(detail.pregnancy_monitoring_status));
+    appendFact(pregnancy, 'Luaran', outcomeTypeLabel(detail.canonical_outcome_type));
+    appendFact(pregnancy, 'Tanggal luaran', formatDate(detail.canonical_outcome_date));
+
+    renderHighRiskTags('hrCurrentRisks', detail.current_risk_factors, detail.current_risk_factors_text, detail.current_risk_assessment_status, false);
+    renderHighRiskTags('hrEverRisks', detail.ever_risk_factors, detail.ever_risk_factors_text, null, false);
+    renderRiskReasons(detail);
+
+    const measurements = document.getElementById('hrLatestMeasurements');
+    measurements.replaceChildren();
+    appendFact(measurements, 'Hb', hrMeasurement(detail.latest_hb_values, 'g/dL', detail.latest_hb_categories));
+    appendFact(measurements, 'Tanggal Hb', formatDate(detail.latest_hb_date));
+    appendFact(measurements, 'Tekanan darah', hrBloodPressure(detail.latest_systolic_values, detail.latest_diastolic_values, detail.latest_bp_categories));
+    appendFact(measurements, 'Tanggal tekanan darah', formatDate(detail.latest_bp_date));
+    appendFact(measurements, 'LiLA', hrMeasurement(detail.latest_lila_values, 'cm'));
+    appendFact(measurements, 'Tanggal LiLA', formatDate(detail.latest_lila_date));
+    appendFact(measurements, 'Protein urine', pregnancyProteinUrineLabel(detail));
+
+    const alertSection = document.getElementById('hrDetailAlertSection');
+    alertSection.hidden = detail.current_clinical_alert !== true;
+    if (!alertSection.hidden) renderHighRiskTags('hrDetailAlerts', detail.current_clinical_alerts, detail.current_clinical_alerts_text, null, true);
+
+    document.getElementById('hrFollowUpSection').hidden = detail.current_suspect_preeclampsia_reassessment_needed_flag !== true;
+    renderDiagnosisEvidence(detail);
+    document.getElementById('hrConflictBanner').hidden = !(
+      detail.current_risk_conflict_flag === true || detail.protein_urine_conflict_flag === true
+    );
+    renderHighRiskEvidence(evidence);
+    renderHighRiskTimeline(timeline);
+  }
+
+  function renderHighRiskTags(containerId, values, fallback, status, alert) {
+    const container = document.getElementById(containerId);
+    container.replaceChildren();
+    let items = alert
+      ? hrArray(values).map(alertCodeLabel).filter(Boolean)
+      : presentRiskFactors(values);
+    if (!items.length && fallback) {
+      items = alert
+        ? String(fallback).split(/[,;|]/).map(alertCodeLabel).filter(Boolean)
+        : presentRiskFactors(String(fallback).split(/[,;|]/));
+    }
+    if (!items.length) {
+      const empty = document.createElement('span');
+      empty.className = 'empty-tag';
+      empty.textContent = status === 'NOT_ASSESSABLE' ? 'Belum Dapat Dinilai' : 'Tidak ada faktor yang tercatat.';
+      container.appendChild(empty);
+      return;
+    }
+    items.forEach(function(item) {
+      const tag = document.createElement('span');
+      tag.className = 'risk-tag' + (alert ? ' alert-tag' : '');
+      tag.textContent = item;
+      container.appendChild(tag);
+    });
+  }
+
+  function renderHighRiskEvidence(rows) {
+    const body = document.getElementById('hrEvidenceBody');
+    body.replaceChildren();
+    if (!rows.length) {
+      const row = document.createElement('tr');
+      const cell = hrTextCell('Evidence detail belum tersedia.');
+      cell.colSpan = 9;
+      cell.className = 'empty-state';
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach(function(item) {
+      const row = document.createElement('tr');
+      row.appendChild(hrTextCell(formatDate(item.visit_date)));
+      row.appendChild(hrStackCell([
+        item.source_system || 'Sumber tidak tercatat',
+        'Waktu sumber: ' + formatSourceDateTime(item.source_datetime),
+        'File: ' + (item.source_file || '-'),
+        'anc_record_id: ' + (item.anc_record_id || '-'),
+        'patient_key: ' + (item.patient_key || '-'),
+        'pregnancy_key: ' + (item.pregnancy_key || '-')
+      ]));
+      row.appendChild(hrStackCell([cleanFacilityLabel(item.facility_name || item.anc_location), cleanDisplayText(item.desa)]));
+      row.appendChild(hrStackCell([
+        isPresent(item.hemoglobin_value) ? formatNumber(item.hemoglobin_value) + ' g/dL' : 'Tidak ada Hb numerik',
+        clinicalValueLabel(item.hb_category_norm || item.hb_category_raw) || '-'
+      ]));
+      row.appendChild(hrStackCell([
+        isPresent(item.systolic_bp) || isPresent(item.diastolic_bp) ? (item.systolic_bp || '-') + '/' + (item.diastolic_bp || '-') + ' mmHg' : 'Tidak ada BP numerik',
+        clinicalValueLabel(item.bp_category_norm || item.bp_category_raw) || '-'
+      ]));
+      row.appendChild(hrTextCell(proteinUrineLabel(
+        item.protein_urine_category_norm,
+        item.protein_urine_assessed_flag,
+        item.proteinuria_positive_flag,
+        item.protein_urine_conflict_flag
+      )));
+      row.appendChild(hrTextCell(isPresent(item.arm_circumference_value) ? formatNumber(item.arm_circumference_value) + ' cm' : '-'));
+      row.appendChild(hrTextCell(formatDiagnosisValue(item.diagnoses)));
+      row.appendChild(hrTextCell(item.risk_factors_text ? cleanDisplayText(item.risk_factors_text) : 'Tidak ada interpretasi risiko tercatat'));
+      body.appendChild(row);
+    });
+  }
+
+  function renderHighRiskTimeline(events) {
+    const container = document.getElementById('hrTimeline');
+    container.replaceChildren();
+    if (!events.length) {
+      setInlineState('hrTimeline', 'Timeline klinis belum tersedia.', '', 'empty');
+      return;
+    }
+    events.forEach(function(event) {
+      const item = document.createElement('article');
+      item.className = 'timeline-item event-' + String(event.event_type || 'clinical').toLowerCase();
+      const marker = document.createElement('div');
+      marker.className = 'timeline-marker';
+      const card = document.createElement('div');
+      card.className = 'card timeline-card';
+      const header = document.createElement('div');
+      header.className = 'timeline-card-header';
+      const copy = document.createElement('div');
+      const date = document.createElement('span');
+      date.className = 'timeline-date';
+      date.textContent = formatDate(event.event_date);
+      const title = document.createElement('h3');
+      title.textContent = clinicalEventLabel(event);
+      copy.append(date, title);
+      const type = document.createElement('span');
+      type.className = 'event-type-badge';
+      type.textContent = clinicalEventTypeLabel(event.event_type);
+      header.append(copy, type);
+      const facts = document.createElement('dl');
+      facts.className = 'clinical-metrics';
+      if (String(event.event_type).toUpperCase() === 'ANC') {
+        appendMetric(facts, 'Usia kehamilan', isPresent(event.gestational_age_weeks) ? event.gestational_age_weeks + ' minggu' : null);
+        appendMetric(facts, 'Tekanan darah', isPresent(event.systolic_bp) || isPresent(event.diastolic_bp) ? (event.systolic_bp || '-') + '/' + (event.diastolic_bp || '-') + ' mmHg' : null);
+        appendMetric(facts, 'Hb', valueWithUnit(event.hemoglobin_g_dl, 'g/dL'));
+        appendMetric(facts, 'LiLA', valueWithUnit(event.lila_cm, 'cm'));
+        appendMetric(facts, 'DJJ', fhrCategoryLabel(event.fhr_category));
+      } else if (String(event.event_type).toUpperCase() === 'OUTCOME') {
+        appendMetric(facts, 'Tempat', deliveryPlaceLabel(event.delivery_place || event.facility));
+        appendMetric(facts, 'Cara persalinan', deliveryModeLabel(event.delivery_mode));
+        appendMetric(facts, 'Berat lahir', valueWithUnit(event.newborn_birth_weight_g, 'g'));
+      } else if (String(event.event_type).toUpperCase() === 'PNC_SUMMARY') {
+        appendMetric(facts, 'PNC 1', event.pnc_1 ? 'Ya' : 'Tidak');
+        appendMetric(facts, 'PNC 2', event.pnc_2 ? 'Ya' : 'Tidak');
+        appendMetric(facts, 'PNC 3', event.pnc_3 ? 'Ya' : 'Tidak');
+      }
+      appendMetric(facts, 'Fasilitas', event.facility ? cleanFacilityLabel(event.facility) : null);
+      appendMetric(facts, 'Desa', event.desa ? cleanDisplayText(event.desa) : null);
+      card.append(header, facts);
+      if (event.conflict_flag === true) {
+        const warning = document.createElement('div');
+        warning.className = 'conflict-banner';
+        warning.textContent = 'Event ini memiliki evidence berbeda antar sumber.';
+        card.appendChild(warning);
+      }
+      item.append(marker, card);
+      container.appendChild(item);
+    });
+  }
+
+  function showHighRiskView(view) {
+    const views = {
+      dashboard: document.getElementById('highRiskDashboardView'),
+      list: document.getElementById('highRiskListView'),
+      detail: document.getElementById('highRiskDetailView')
+    };
+    Object.keys(views).forEach(function(key) { views[key].hidden = key !== view; });
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }
+
+  function backToHighRiskDashboard() { showHighRiskView('dashboard'); }
+  function backToHighRiskList() { showHighRiskView('list'); }
+
+  function handleHighRiskError(error, stateId) {
+    const message = error && error.message ? error.message : String(error);
+    if (isAuthenticationError(message)) {
+      handleProtectedError(error, 'loginMessage');
+      return;
+    }
+    setInlineState(stateId, 'Gagal mengambil data risiko tinggi.', /not found|belum lengkap/i.test(message) ? message : 'Silakan coba kembali. Jika berulang, periksa Executions / Cloud Logging.', 'error');
+  }
+
+  function hrTextCell(value) {
+    const cell = document.createElement('td');
+    cell.textContent = value == null || value === '' ? '-' : String(value);
+    return cell;
+  }
+
+  function hrNumberCell(value, className) {
+    const cell = hrTextCell(new Intl.NumberFormat('id-ID').format(Number(value) || 0));
+    cell.className = (className || '') + ' numeric-cell';
+    return cell;
+  }
+
+  function hrCountPercentCell(value, denominator) {
+    const count = Number(value) || 0;
+    const total = Number(denominator) || 0;
+    const percentage = total > 0 ? (count / total * 100).toFixed(1) : '0,0';
+    const cell = hrTextCell(
+      new Intl.NumberFormat('id-ID').format(count) + ' (' + percentage.replace('.', ',') + '%)'
+    );
+    cell.className = 'numeric-cell percentage-cell';
+    return cell;
+  }
+
+  function hrStackCell(values) {
+    const cell = document.createElement('td');
+    const stack = document.createElement('div');
+    stack.className = 'table-stack';
+    (values || []).forEach(function(value) {
+      const line = document.createElement('span');
+      line.textContent = value == null || value === '' ? '-' : String(value);
+      stack.appendChild(line);
+    });
+    cell.appendChild(stack);
+    return cell;
+  }
+
+  function hrBadgeCell(label, className) {
+    const cell = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'status-badge ' + className;
+    badge.textContent = label;
+    cell.appendChild(badge);
+    return cell;
+  }
+
+  function hrArray(value) {
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (!value) return [];
+    const text = String(value).trim();
+    if (!text) return [];
+    if (text.charAt(0) === '[') {
+      try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) return parsed.filter(Boolean); } catch (error) {}
+    }
+    return text.split(/[,;|]/).map(function(item) { return item.trim(); }).filter(Boolean);
+  }
+
+  function hrRiskText(values, fallback, status) {
+    const mapped = presentRiskFactors(values);
+    if (mapped.length) return mapped.join(', ');
+    if (fallback) return presentRiskFactors(fallback).join(', ') || cleanDisplayText(fallback);
+    return status === 'NOT_ASSESSABLE' ? 'Belum Dapat Dinilai' : 'Tidak ada faktor yang tercatat';
+  }
+
+  function hrAlertText(value) {
+    const mapped = hrArray(value).map(alertCodeLabel).filter(Boolean);
+    return mapped.length ? mapped.join(', ') : (value ? cleanDisplayText(value) : 'Tidak ada alert klinis terkini');
+  }
+
+  function riskFactorLabel(value) {
+    const key = clinicalCodeKey(value);
+    const labels = {
+      AGE_LT20: 'Usia <20 tahun', RISK_AGE_LT20: 'Usia <20 tahun',
+      AGE_GT35: 'Usia >35 tahun', RISK_AGE_GT35: 'Usia >35 tahun',
+      SHORT_STATURE: 'Tinggi badan <145 cm', RISK_SHORT_STATURE: 'Tinggi badan <145 cm',
+      UNDERWEIGHT_EARLY_BMI: 'BMI awal <18,5', RISK_UNDERWEIGHT_EARLY_BMI: 'BMI awal <18,5',
+      HIGH_PARITY: 'Paritas tinggi (\u22654)', RISK_HIGH_PARITY: 'Paritas tinggi (\u22654)',
+      SHORT_BIRTH_INTERVAL: 'Jarak kehamilan <2 tahun', RISK_SHORT_BIRTH_INTERVAL: 'Jarak kehamilan <2 tahun',
+      KEK: 'KEK', CURRENT_KEK: 'KEK',
+      ANEMIA: 'Anemia', CURRENT_ANEMIA: 'Anemia',
+      HYPERTENSION: 'Hipertensi', CURRENT_HYPERTENSION: 'Hipertensi',
+      SUSPECT_PREECLAMPSIA: 'Skrining Mengarah ke Preeklampsia',
+      GESTATIONAL_HYPERTENSION_DIAGNOSIS: 'Hipertensi gestasional',
+      GESTATIONAL_HYPERTENSION_REPORTED: 'Hipertensi gestasional',
+      PREECLAMPSIA_DIAGNOSIS: 'Preeklampsia',
+      PREECLAMPSIA_REPORTED: 'Preeklampsia',
+      SEVERE_PREECLAMPSIA_DIAGNOSIS: 'Preeklampsia berat',
+      SEVERE_PREECLAMPSIA_REPORTED: 'Preeklampsia berat',
+      ECLAMPSIA_DIAGNOSIS: 'Eklampsia',
+      ECLAMPSIA_REPORTED: 'Eklampsia',
+      DIABETES_IN_PREGNANCY: 'Diabetes dalam kehamilan',
+      DIABETES_IN_PREGNANCY_REPORTED: 'Diabetes dalam kehamilan',
+      MULTIPLE_PREGNANCY: 'Kehamilan ganda',
+      MULTIPLE_PREGNANCY_REPORTED: 'Kehamilan ganda',
+      UTERINE_SCAR_REPORTED: 'Bekas luka uterus',
+      PLACENTA_PREVIA_REPORTED: 'Plasenta previa', RISK_PLACENTA_PREVIA_REPORTED: 'Plasenta previa',
+      BREECH_REPORTED: 'Presentasi sungsang', RISK_BREECH_REPORTED: 'Presentasi sungsang',
+      OTHER_MALPRESENTATION_REPORTED: 'Malpresentasi lain', RISK_OTHER_MALPRESENTATION_REPORTED: 'Malpresentasi lain',
+      MALPRESENTATION_HISTORY: 'Malpresentasi pernah dilaporkan',
+      MALPRESENTATION_REPORTED: 'Malpresentasi pernah dilaporkan',
+      HIV: 'HIV positif', RISK_HIV: 'HIV positif',
+      SYPHILIS: 'Sifilis positif', RISK_SYPHILIS: 'Sifilis positif',
+      HEPATITIS_B: 'Hepatitis B positif', RISK_HEPATITIS_B: 'Hepatitis B positif',
+      SEVERE_HYPERTENSION: 'Hipertensi berat berdasarkan tekanan darah numerik'
+    };
+    return labels[key] || cleanDisplayText(value);
+  }
+
+  function alertCodeLabel(value) {
+    const labels = {
+      ABNORMAL_FHR: 'DJJ Abnormal',
+      FHR_NOT_DETECTED: 'DJJ Tidak Terdeteksi',
+      FUNDAL_HEIGHT_MISMATCH: 'Tinggi Fundus Tidak Sesuai Usia Kehamilan',
+      ABNORMAL_USG_SUSPECTED: 'Kecurigaan Hasil USG Abnormal'
+    };
+    const key = clinicalCodeKey(value);
+    return labels[key] || cleanDisplayText(value);
+  }
+
+  function riskStatusLabel(value) {
+    const labels = {
+      URGENT: 'Perlu Evaluasi Segera',
+      HIGH_RISK: 'Risiko Tinggi',
+      CONFLICTING_EVIDENCE: 'Data Pemeriksaan Berbeda Antar Sumber',
+      NOT_ASSESSABLE: 'Belum Dapat Dinilai',
+      NO_HIGH_RISK_DETECTED: 'Tidak Terdeteksi Risiko Tinggi'
+    };
+    return labels[String(value || '').toUpperCase()] || 'Status belum tersedia';
+  }
+
+  function riskBadgeClass(value) {
+    const classes = {
+      URGENT: 'urgent', HIGH_RISK: 'high-risk', CONFLICTING_EVIDENCE: 'conflicting',
+      NOT_ASSESSABLE: 'not-assessable', NO_HIGH_RISK_DETECTED: 'no-high-risk'
+    };
+    return classes[String(value || '').toUpperCase()] || 'neutral';
+  }
+
+  function monitoringStatusLabel(value) {
+    const labels = {
+      ACTIVE_PREGNANCY: 'Kehamilan Aktif',
+      OVER_42W_NO_OUTCOME: '≥42 Minggu, Belum Ada Luaran',
+      NO_OUTCOME_DATING_UNKNOWN: 'Luaran Belum Tercatat, Dating Tidak Diketahui',
+      DELIVERED: 'Melahirkan', ABORTION: 'Abortus', OUTCOME_RECORDED: 'Luaran Tercatat',
+      ALL: 'Semua Status Kehamilan'
+    };
+    return labels[String(value || '').toUpperCase()] || 'Status kehamilan belum tersedia';
+  }
+
+  function monitoringBadgeClass(value) {
+    return ['OVER_42W_NO_OUTCOME', 'NO_OUTCOME_DATING_UNKNOWN'].indexOf(String(value || '').toUpperCase()) !== -1 ? 'follow-up' : 'monitoring';
+  }
+
+  function outcomeTypeLabel(value) {
+    const key = String(value || '').toUpperCase();
+    if (key === 'DELIVERY') return 'Melahirkan';
+    if (key === 'ABORTION') return 'Abortus';
+    return value ? cleanDisplayText(value) : 'Belum Ada Luaran Tercatat';
+  }
+
+  function highRiskLocationLabel(value) {
+    const key = String(value || '').trim().toUpperCase();
+    if (!key || key === 'BELUM TERPETAKAN') return 'Belum Terpetakan';
+    if (key === 'LOKASI PERLU VERIFIKASI') return 'Lokasi Perlu Verifikasi';
+    return cleanFacilityLabel(value);
+  }
+
+  function hrMeasurement(values, unit, categories) {
+    const numeric = hrArray(values).map(function(value) { return formatNumber(value) + (unit ? ' ' + unit : ''); });
+    const category = hrArray(categories).map(clinicalValueLabel).filter(Boolean);
+    return numeric.concat(category).join(' · ') || 'Belum diperiksa';
+  }
+
+  function hrBloodPressure(systolic, diastolic, categories) {
+    const s = hrArray(systolic);
+    const d = hrArray(diastolic);
+    const length = Math.max(s.length, d.length);
+    const values = [];
+    for (let i = 0; i < length; i += 1) values.push((isPresent(s[i]) ? s[i] : '-') + '/' + (isPresent(d[i]) ? d[i] : '-') + ' mmHg');
+    return values.concat(hrArray(categories).map(clinicalValueLabel).filter(Boolean)).join(' · ') || 'Belum diperiksa';
+  }
+  function presentRiskFactors(values) {
+    const raw = hrArray(values);
+    if (!raw.length) return [];
+    const domain = raw.map(function(value) {
+      return hypertensivePresentationForKey(clinicalCodeKey(value));
+    });
+    const output = raw.filter(function(value, index) {
+      return domain[index] === null;
+    }).map(riskFactorLabel).filter(Boolean);
+    const mostSpecific = domain.filter(Boolean).sort(function(a, b) { return b.rank - a.rank; })[0];
+    if (mostSpecific) output.push(mostSpecific.label);
+    return Array.from(new Set(output));
+  }
+
+  function hypertensivePresentationForKey(key) {
+    const diagnosis = /DIAGNOSIS|REPORTED/.test(key);
+    if (/SUSPECT_PREECLAMPSIA/.test(key)) {
+      return { rank: 40, label: 'Skrining Mengarah ke Preeklampsia' };
+    }
+    if (/PREECLAMPSIA/.test(key)) {
+      if (diagnosis && /SEVERE/.test(key)) return { rank: 60, label: 'Preeklampsia berat' };
+      if (diagnosis) return { rank: 50, label: 'Preeklampsia' };
+      return { rank: 35, label: 'Evidence terkait preeklampsia' };
+    }
+    if (/ECLAMPSIA/.test(key) && diagnosis) return { rank: 70, label: 'Eklampsia' };
+    if (/GESTATIONAL.*HYPERTENSION|HYPERTENSION.*GESTATIONAL/.test(key)) {
+      return { rank: 30, label: 'Hipertensi gestasional' };
+    }
+    if (/SEVERE.*HYPERTENSION|HYPERTENSION.*SEVERE/.test(key)) {
+      return { rank: 20, label: 'Hipertensi Berat Berdasarkan Pengukuran Numerik' };
+    }
+    if (/HYPERTENSION/.test(key)) return { rank: 10, label: 'Hipertensi' };
+    return null;
+  }
+
+  function diagnosisConditionLabels(record) {
+    const keys = [];
+    if (record && record.diagnosis_hypertensive_risk_code) keys.push(clinicalCodeKey(record.diagnosis_hypertensive_risk_code));
+    hrArray(record && record.current_risk_factors).concat(hrArray(record && record.ever_risk_factors)).forEach(function(value) {
+      keys.push(clinicalCodeKey(value));
+    });
+    Object.keys(record || {}).forEach(function(field) {
+      if (record[field] !== true) return;
+      keys.push(clinicalCodeKey(field));
+    });
+    const labels = [];
+    const hypertensive = keys.map(function(key) {
+      if (!/DIAGNOSIS|REPORTED/.test(key)) return null;
+      if (!/GESTATIONAL.*HYPERTENSION|HYPERTENSION.*GESTATIONAL|PREECLAMPSIA|ECLAMPSIA/.test(key)) return null;
+      return hypertensivePresentationForKey(key);
+    }).filter(Boolean).sort(function(a, b) { return b.rank - a.rank; })[0];
+    if (hypertensive) labels.push(hypertensive.label);
+    keys.forEach(function(key) {
+      if (/GESTATIONAL.*HYPERTENSION|HYPERTENSION.*GESTATIONAL|PREECLAMPSIA|ECLAMPSIA/.test(key)) return;
+      const label = canonicalDiagnosisEvidenceLabel(key);
+      if (label) labels.push(label);
+    });
+    return Array.from(new Set(labels));
+  }
+
+  function diagnosisConditionText(record) {
+    const labels = diagnosisConditionLabels(record);
+    return labels.length ? labels.join(', ') : 'Tidak ada diagnosis/kondisi dilaporkan';
+  }
+
+  function renderRiskReasons(detail) {
+    const list = document.getElementById('hrRiskReasons');
+    list.replaceChildren();
+    const factors = hrArray(detail.current_risk_factors);
+    const reasons = [];
+    factors.forEach(function(value) {
+      const key = clinicalCodeKey(value);
+      let reason = riskFactorLabel(value);
+      if (/ANEMIA/.test(key)) {
+        reason += ' · Hb ' + hrMeasurement(detail.latest_hb_values, 'g/dL', detail.latest_hb_categories) + ' · ' + formatDate(detail.latest_hb_date);
+      } else if (/SUSPECT_PREECLAMPSIA/.test(key)) {
+        reason += ' · Tekanan darah ' + hrBloodPressure(detail.latest_systolic_values, detail.latest_diastolic_values, detail.latest_bp_categories) +
+          ' · Protein urine ' + pregnancyProteinUrineLabel(detail);
+      } else if (/HYPERTENSION/.test(key) && !/GESTATIONAL/.test(key)) {
+        reason += ' · ' + hrBloodPressure(detail.latest_systolic_values, detail.latest_diastolic_values, detail.latest_bp_categories) + ' · ' + formatDate(detail.latest_bp_date);
+      } else if (/(^|_)KEK($|_)/.test(key)) {
+        reason += ' · LiLA ' + hrMeasurement(detail.latest_lila_values, 'cm') + ' · ' + formatDate(detail.latest_lila_date);
+      }
+      reasons.push(reason);
+    });
+    if (!reasons.length && detail.current_risk_factors_text) {
+      reasons.push(cleanDisplayText(detail.current_risk_factors_text));
+    }
+    diagnosisConditionLabels(detail).forEach(function(label) {
+      reasons.push('Diagnosis/kondisi dilaporkan: ' + label);
+    });
+    if (detail.current_risk_assessment_status === 'CONFLICTING_EVIDENCE' || detail.current_risk_conflict_flag === true) {
+      reasons.push('Data pemeriksaan berbeda antar sumber; seluruh evidence ditampilkan di bawah.');
+    }
+    if (detail.current_risk_assessment_status === 'NOT_ASSESSABLE') {
+      reasons.push('Evidence yang tersedia belum cukup untuk penilaian risiko terkini.');
+    }
+    if (!reasons.length && detail.current_risk_assessment_status === 'NO_HIGH_RISK_DETECTED') {
+      reasons.push('Tidak ada faktor risiko tinggi yang terdeteksi pada evidence terkini yang dapat dinilai.');
+    }
+    Array.from(new Set(reasons)).forEach(function(reason) {
+      const item = document.createElement('li');
+      item.textContent = reason;
+      list.appendChild(item);
+    });
+  }
+
+  function formatSourceDateTime(value) {
+    if (!value) return '-';
+    const text = String(value).trim();
+    if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+      return cleanDisplayText(text.replace('T', ' '));
+    }
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return cleanDisplayText(value);
+    return new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
+    }).format(parsed) + ' WITA';
+  }
+
+  function renderDiagnosisEvidence(detail) {
+    const unique = diagnosisConditionLabels(detail);
+    const section = document.getElementById('hrDiagnosisSection');
+    section.hidden = !unique.length;
+    if (section.hidden) return;
+    const container = document.getElementById('hrDiagnosisEvidence');
+    container.replaceChildren();
+    unique.forEach(function(label) {
+      const tag = document.createElement('span');
+      tag.className = 'risk-tag';
+      tag.textContent = label;
+      container.appendChild(tag);
+    });
+  }
+
+  function canonicalDiagnosisEvidenceLabel(key) {
+    if (!key || /REASSESSMENT/.test(key)) return null;
+    if (/SUSPECT_PREECLAMPSIA/.test(key)) return null;
+    if (/SEVERE.*PREECLAMPSIA|PREECLAMPSIA.*SEVERE/.test(key)) return 'Preeklampsia berat';
+    if (/PREECLAMPSIA/.test(key) && /DIAGNOSIS|REPORTED/.test(key)) return 'Preeklampsia';
+    if (/ECLAMPSIA/.test(key) && /DIAGNOSIS|REPORTED/.test(key)) return 'Eklampsia';
+    if (/GESTATIONAL.*HYPERTENSION|HYPERTENSION.*GESTATIONAL/.test(key)) return 'Hipertensi gestasional';
+    if (/DIABETES/.test(key) && /PREGNANCY|GESTATIONAL/.test(key)) return 'Diabetes dalam kehamilan';
+    if (/MULTIPLE.*PREGNANCY|PREGNANCY.*MULTIPLE/.test(key)) return 'Kehamilan ganda';
+    if (/UTERINE.*SCAR|SCAR.*UTERINE/.test(key)) return 'Bekas luka uterus';
+    if (/PLACENTA.*PREVIA|PREVIA.*PLACENTA/.test(key)) return 'Plasenta previa';
+    if (/BREECH/.test(key)) return 'Presentasi sungsang';
+    if (/OTHER.*MALPRESENTATION|MALPRESENTATION.*OTHER/.test(key)) return 'Malpresentasi lain';
+    if (/MALPRESENTATION/.test(key)) return 'Malpresentasi pernah dilaporkan';
+    return null;
+  }
+
+  function pregnancyProteinUrineLabel(detail) {
+    const hasCanonicalField = Object.prototype.hasOwnProperty.call(detail, 'protein_urine_category_norm') ||
+      Object.prototype.hasOwnProperty.call(detail, 'protein_urine_assessed_flag') ||
+      Object.prototype.hasOwnProperty.call(detail, 'proteinuria_positive_flag') ||
+      Object.prototype.hasOwnProperty.call(detail, 'protein_urine_conflict_flag');
+    if (!hasCanonicalField) return 'Lihat evidence per pemeriksaan';
+    return proteinUrineLabel(
+      detail.protein_urine_category_norm,
+      detail.protein_urine_assessed_flag,
+      detail.proteinuria_positive_flag,
+      detail.protein_urine_conflict_flag
+    );
+  }
+
+  function proteinUrineLabel(category, assessed, positive, conflict) {
+    const labels = {
+      POSITIVE: 'Positif', NEGATIVE: 'Negatif', NOT_TESTED: 'Belum diperiksa',
+      NOT_RECORDED: 'Belum dicatat', UNKNOWN: 'Belum diketahui'
+    };
+    const key = clinicalCodeKey(category);
+    let state = labels[key] || '';
+    if (!state && positive === true) state = 'Positif';
+    if (!state && assessed === false) state = 'Belum ada status canonical';
+    if (!state) state = 'Belum ada status canonical';
+    return conflict === true
+      ? state + ' · Data Pemeriksaan Berbeda Antar Sumber'
+      : state;
+  }
+
+  function formatDiagnosisValue(value) {
+    const values = hrArray(value);
+    if (!values.length) return 'Tidak ada diagnosis dilaporkan';
+    return values.map(function(item) {
+      const label = canonicalDiagnosisEvidenceLabel(clinicalCodeKey(item) + '_REPORTED');
+      return label || 'Dilaporkan: ' + cleanDisplayText(item);
+    }).join(', ');
+  }
+</script>

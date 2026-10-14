@@ -1,0 +1,758 @@
+<script>
+  const RiskAnalyticsState = {
+    loaded: false,
+    loadingPromise: null,
+    locations: [],
+    filters: null,
+    overview: null,
+    trend: null,
+    regional: null,
+    regionalMetric: 'PERCENT'
+  };
+
+  const ANALYTICS_SERIES = {
+    risk_detected: { label: 'Evidence risiko', color: '#2f8f83', riskFactor: null },
+    anemia: { label: 'Anemia', color: '#d8795e', riskFactor: 'ANEMIA' },
+    hypertension: { label: 'Hipertensi', color: '#ad4b4b', riskFactor: 'HYPERTENSION' },
+    kek: { label: 'KEK', color: '#b58a28', riskFactor: 'KEK' },
+    suspect_preeclampsia: { label: 'Skrining Mengarah ke Preeklampsia', color: '#795b9e', riskFactor: 'SUSPECT_PREECLAMPSIA' }
+  };
+
+  const analyticsFilterForm = document.getElementById('analyticsFilterForm');
+  const analyticsPeriod = document.getElementById('analyticsPeriod');
+  const analyticsPuskesmas = document.getElementById('analyticsPuskesmas');
+  const analyticsRiskFactor = document.getElementById('analyticsRiskFactor');
+  const analyticsDiagnosis = document.getElementById('analyticsDiagnosis');
+  if (analyticsFilterForm) analyticsFilterForm.addEventListener('submit', handleRiskAnalyticsFilterSubmit);
+  if (analyticsPeriod) analyticsPeriod.addEventListener('change', updateRiskAnalyticsPeriodFields);
+  if (analyticsPuskesmas) analyticsPuskesmas.addEventListener('change', updateRiskAnalyticsDesaOptions);
+  if (analyticsRiskFactor) analyticsRiskFactor.addEventListener('change', function() {
+    if (analyticsRiskFactor.value !== 'ALL') analyticsDiagnosis.value = 'ALL';
+  });
+  if (analyticsDiagnosis) analyticsDiagnosis.addEventListener('change', function() {
+    if (analyticsDiagnosis.value !== 'ALL') analyticsRiskFactor.value = 'ALL';
+  });
+  document.querySelectorAll('.factor-toggle-list input').forEach(function(input) {
+    input.addEventListener('change', renderRiskAnalyticsFactorTrend);
+  });
+
+  function resetRiskAnalyticsState() {
+    RiskAnalyticsState.loaded = false;
+    RiskAnalyticsState.loadingPromise = null;
+    RiskAnalyticsState.locations = [];
+    RiskAnalyticsState.filters = null;
+    RiskAnalyticsState.overview = null;
+    RiskAnalyticsState.trend = null;
+    RiskAnalyticsState.regional = null;
+    RiskAnalyticsState.regionalMetric = 'PERCENT';
+  }
+
+  async function initializeRiskAnalyticsPage() {
+    if (RiskAnalyticsState.loaded || !AppState.token) return;
+    if (RiskAnalyticsState.loadingPromise) return RiskAnalyticsState.loadingPromise;
+    RiskAnalyticsState.loadingPromise = (async function() {
+      setInlineState('analyticsPageStatus', 'Memuat analitik...', 'Setiap modul dimuat secara terpisah dari BigQuery.', 'loading');
+      try {
+        try {
+          RiskAnalyticsState.locations = await callServer('getHighRiskLocationOptions', AppState.token) || [];
+          populateRiskAnalyticsLocations();
+        } catch (locationError) {
+          showMessage('analyticsMessage', 'Pilihan lokasi belum dapat dimuat. Chart lain tetap dicoba.', 'warning');
+        }
+        await loadRiskAnalytics();
+      } finally {
+        RiskAnalyticsState.loadingPromise = null;
+      }
+    })();
+    return RiskAnalyticsState.loadingPromise;
+  }
+
+  function readRiskAnalyticsFilters() {
+    return {
+      period: document.getElementById('analyticsPeriod').value,
+      periodStart: document.getElementById('analyticsPeriodStart').value || null,
+      periodEnd: document.getElementById('analyticsPeriodEnd').value || null,
+      monitoringStatus: document.getElementById('analyticsMonitoringStatus').value,
+      riskStatus: document.getElementById('analyticsRiskStatus').value,
+      puskesmas: document.getElementById('analyticsPuskesmas').value || null,
+      desa: document.getElementById('analyticsDesa').value || null,
+      riskFactor: document.getElementById('analyticsRiskFactor').value,
+      diagnosis: document.getElementById('analyticsDiagnosis').value,
+      clinicalAlert: document.getElementById('analyticsClinicalAlert').value
+    };
+  }
+
+  async function handleRiskAnalyticsFilterSubmit(event) {
+    event.preventDefault();
+    await loadRiskAnalytics();
+  }
+
+  async function loadRiskAnalytics() {
+    const filters = readRiskAnalyticsFilters();
+    if (filters.period === 'CUSTOM' && (!filters.periodStart || !filters.periodEnd)) {
+      showMessage('analyticsMessage', 'Isi tanggal mulai dan tanggal akhir untuk periode custom.', 'warning');
+      return;
+    }
+    RiskAnalyticsState.filters = filters;
+    const button = document.getElementById('analyticsApplyFilter');
+    if (button) button.disabled = true;
+    showMessage('analyticsMessage', '', '');
+    setInlineState('analyticsPageStatus', 'Memuat analitik...', 'Overview, tren, dan wilayah dihitung dengan filter yang sama.', 'loading');
+    setAnalyticsModulesLoading(true);
+    const requests = [
+      callServer('getRiskAnalyticsOverview', AppState.token, filters),
+      callServer('getRiskAnalyticsTrend', AppState.token, filters),
+      callServer('getRiskAnalyticsRegional', AppState.token, filters)
+    ];
+    try {
+      const results = await Promise.allSettled(requests);
+      let failures = 0;
+      if (results[0].status === 'fulfilled') {
+        RiskAnalyticsState.overview = results[0].value;
+        RiskAnalyticsState.filters = results[0].value.filters || filters;
+        renderRiskAnalyticsOverview(results[0].value);
+      } else {
+        failures += 1;
+        setOverviewModuleError(results[0].reason);
+      }
+      if (results[1].status === 'fulfilled') {
+        RiskAnalyticsState.trend = results[1].value;
+        renderRiskAnalyticsTrends(results[1].value);
+      } else {
+        failures += 1;
+        setAnalyticsModuleState('analyticsTrendState', analyticsErrorMessage(results[1].reason), 'error');
+        setAnalyticsModuleState('analyticsFactorTrendState', analyticsErrorMessage(results[1].reason), 'error');
+      }
+      if (results[2].status === 'fulfilled') {
+        RiskAnalyticsState.regional = results[2].value;
+        renderRiskAnalyticsRegional(results[2].value);
+      } else {
+        failures += 1;
+        setAnalyticsModuleState('analyticsRegionalState', analyticsErrorMessage(results[2].reason), 'error');
+        setAnalyticsModuleState('analyticsHeatmapState', analyticsErrorMessage(results[2].reason), 'error');
+      }
+      RiskAnalyticsState.loaded = failures < 3;
+      if (failures) {
+        setInlineState('analyticsPageStatus', 'Sebagian analitik belum dapat dimuat.', 'Modul yang berhasil tetap ditampilkan. Coba muat ulang atau ubah filter.', 'warning');
+      } else {
+        setInlineState('analyticsPageStatus', '', '', '');
+      }
+    } catch (error) {
+      handleRiskAnalyticsError(error);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function setAnalyticsModulesLoading(isLoading) {
+    const ids = [
+      'analyticsOverviewState', 'analyticsTrendState', 'analyticsFactorState', 'analyticsRegionalState',
+      'analyticsFactorTrendState', 'analyticsDynamicState', 'analyticsDiagnosisState', 'analyticsHeatmapState',
+      'analyticsPeState', 'analyticsAlertsState', 'analyticsCoverageState', 'analyticsBacklogState'
+    ];
+    ids.forEach(function(id) {
+      if (isLoading) setAnalyticsModuleState(id, 'Memuat analitik...', 'loading');
+    });
+  }
+
+  function setOverviewModuleError(error) {
+    const message = analyticsErrorMessage(error);
+    ['analyticsOverviewState', 'analyticsFactorState', 'analyticsDynamicState', 'analyticsDiagnosisState',
+      'analyticsPeState', 'analyticsAlertsState', 'analyticsCoverageState', 'analyticsBacklogState'].forEach(function(id) {
+      setAnalyticsModuleState(id, message, 'error');
+    });
+  }
+
+  function analyticsErrorMessage(error) {
+    if (isAuthenticationError(error && error.message)) handleClinicalError(error, 'analyticsMessage');
+    return 'Data analitik belum dapat dimuat. Coba muat ulang atau ubah filter.';
+  }
+
+  function handleRiskAnalyticsError(error) {
+    if (isAuthenticationError(error && error.message)) {
+      handleClinicalError(error, 'analyticsMessage');
+      return;
+    }
+    setInlineState('analyticsPageStatus', 'Data analitik belum dapat dimuat.', 'Coba muat ulang atau ubah filter.', 'error');
+  }
+
+  function setAnalyticsModuleState(id, message, type) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.hidden = !message;
+    element.className = 'module-state' + (type ? ' ' + type : '');
+    element.textContent = message || '';
+  }
+
+  function populateRiskAnalyticsLocations() {
+    const select = document.getElementById('analyticsPuskesmas');
+    if (!select) return;
+    const current = select.value;
+    replaceAnalyticsOptions(select, 'Semua Puskesmas', uniqueAnalyticsLocations(RiskAnalyticsState.locations, 'puskesmas'));
+    if (Array.from(select.options).some(function(option) { return option.value === current; })) select.value = current;
+    updateRiskAnalyticsDesaOptions();
+  }
+
+  function updateRiskAnalyticsDesaOptions() {
+    const puskesmas = document.getElementById('analyticsPuskesmas').value;
+    const select = document.getElementById('analyticsDesa');
+    const current = select.value;
+    const rows = (RiskAnalyticsState.locations || []).filter(function(row) {
+      return !puskesmas || row.puskesmas === puskesmas;
+    });
+    replaceAnalyticsOptions(select, 'Semua Desa', uniqueAnalyticsLocations(rows, 'desa'));
+    if (Array.from(select.options).some(function(option) { return option.value === current; })) select.value = current;
+  }
+
+  function replaceAnalyticsOptions(select, allLabel, values) {
+    select.replaceChildren();
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = allLabel;
+    select.appendChild(all);
+    values.forEach(function(value) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = highRiskLocationLabel(value);
+      select.appendChild(option);
+    });
+  }
+
+  function uniqueAnalyticsLocations(rows, field) {
+    return Array.from(new Set((rows || []).map(function(row) { return row[field]; }).filter(Boolean))).sort(function(a, b) {
+      return String(a).localeCompare(String(b), 'id');
+    });
+  }
+
+  function updateRiskAnalyticsPeriodFields() {
+    const custom = document.getElementById('analyticsPeriod').value === 'CUSTOM';
+    document.getElementById('analyticsPeriodStartField').hidden = !custom;
+    document.getElementById('analyticsPeriodEndField').hidden = !custom;
+  }
+
+  function resetRiskAnalyticsFilters() {
+    document.getElementById('analyticsPeriod').value = '6M';
+    document.getElementById('analyticsPeriodStart').value = '';
+    document.getElementById('analyticsPeriodEnd').value = '';
+    document.getElementById('analyticsMonitoringStatus').value = 'ACTIVE_PREGNANCY';
+    document.getElementById('analyticsRiskStatus').value = 'ALL';
+    document.getElementById('analyticsPuskesmas').value = '';
+    updateRiskAnalyticsDesaOptions();
+    document.getElementById('analyticsDesa').value = '';
+    document.getElementById('analyticsRiskFactor').value = 'ALL';
+    document.getElementById('analyticsDiagnosis').value = 'ALL';
+    document.getElementById('analyticsClinicalAlert').value = 'ALL';
+    updateRiskAnalyticsPeriodFields();
+    loadRiskAnalytics();
+  }
+
+  function renderRiskAnalyticsOverview(result) {
+    const summary = result && result.summary ? result.summary : {};
+    const total = analyticsCount(summary.selected_total);
+    setTextContent('analyticsMetricTotal', analyticsFormatNumber(total));
+    setTextContent('analyticsMetricScope', analyticsScopeLabel(result.filters));
+    setTextContent('analyticsMetricHighRisk', analyticsFormatNumber(summary.high_risk));
+    setTextContent('analyticsMetricHighRiskPct', analyticsPercentText(summary.high_risk, total));
+    setTextContent('analyticsMetricUrgent', analyticsFormatNumber(summary.urgent));
+    setTextContent('analyticsMetricSuspectPe', analyticsFormatNumber(summary.current_suspect_preeclampsia));
+    setTextContent('analyticsMetricAlerts', analyticsFormatNumber(summary.clinical_alerts));
+    setTextContent('analyticsMetricNotAssessed', analyticsFormatNumber(summary.not_assessable));
+    renderRiskAnalyticsFreshness(result);
+    setAnalyticsModuleState('analyticsOverviewState', total ? '' : 'Tidak ada data pada kombinasi filter ini.', total ? '' : 'empty');
+    renderAnalyticsBars('analyticsFactorChart', [
+      analyticsBar('Usia >35', summary.risk_age_gt35, total, { riskFactor: 'AGE_GT35' }),
+      analyticsBar('Usia <20', summary.risk_age_lt20, total, { riskFactor: 'AGE_LT20' }),
+      analyticsBar('Perawakan pendek', summary.risk_short_stature, total, { riskFactor: 'SHORT_STATURE' }),
+      analyticsBar('BMI awal <18,5', summary.risk_underweight_early_bmi, total, { riskFactor: 'UNDERWEIGHT_EARLY_BMI' }),
+      analyticsBar('Paritas tinggi (\u22654)', summary.risk_high_parity, total, { riskFactor: 'HIGH_PARITY' }),
+      analyticsBar('Jarak kehamilan <2 tahun', summary.risk_short_birth_interval, total, { riskFactor: 'SHORT_BIRTH_INTERVAL' }),
+      analyticsBar('Anemia terkini', summary.current_anemia, total, { riskFactor: 'ANEMIA' }),
+      analyticsBar('Hipertensi terkini', summary.current_hypertension, total, { riskFactor: 'HYPERTENSION' }),
+      analyticsBar('KEK terkini', summary.current_kek, total, { riskFactor: 'KEK' }),
+      analyticsBar('Skrining Mengarah ke Preeklampsia', summary.current_suspect_preeclampsia, total, { riskFactor: 'SUSPECT_PREECLAMPSIA' }),
+      analyticsBar('HIV positif', summary.risk_hiv, total, { riskFactor: 'HIV' }),
+      analyticsBar('Sifilis positif', summary.risk_syphilis, total, { riskFactor: 'SYPHILIS' }),
+      analyticsBar('Hepatitis B positif', summary.risk_hepatitis_b, total, { riskFactor: 'HEPATITIS_B' })
+    ], 'factor');
+    renderRiskAnalyticsDynamic(summary);
+    renderAnalyticsBars('analyticsDiagnosisChart', [
+      analyticsBar('Hipertensi gestasional', summary.diagnosis_gestational_hypertension, total, { diagnosis: 'GESTATIONAL_HYPERTENSION_REPORTED' }),
+      analyticsBar('Preeklampsia', summary.diagnosis_preeclampsia, total, { diagnosis: 'PREECLAMPSIA_REPORTED' }),
+      analyticsBar('Preeklampsia berat', summary.diagnosis_severe_preeclampsia, total, { diagnosis: 'SEVERE_PREECLAMPSIA_REPORTED' }),
+      analyticsBar('Eklampsia', summary.diagnosis_eclampsia, total, { diagnosis: 'ECLAMPSIA_REPORTED' }),
+      analyticsBar('Diabetes dalam kehamilan', summary.diagnosis_diabetes_in_pregnancy, total, { diagnosis: 'DIABETES_IN_PREGNANCY_REPORTED' }),
+      analyticsBar('Kehamilan ganda', summary.condition_multiple_pregnancy, total, { diagnosis: 'MULTIPLE_PREGNANCY_REPORTED' }),
+      analyticsBar('Bekas luka uterus', summary.condition_uterine_scar, total, { diagnosis: 'UTERINE_SCAR_REPORTED' }),
+      analyticsBar('Plasenta previa', summary.risk_placenta_previa_reported, total, { riskFactor: 'PLACENTA_PREVIA_REPORTED' }),
+      analyticsBar('Presentasi sungsang', summary.risk_breech_reported, total, { riskFactor: 'BREECH_REPORTED' }),
+      analyticsBar('Malpresentasi lain', summary.risk_other_malpresentation_reported, total, { riskFactor: 'OTHER_MALPRESENTATION_REPORTED' })
+    ], 'diagnosis');
+    renderAnalyticsBars('analyticsAlertsChart', [
+      analyticsBar('DJJ abnormal', summary.alert_abnormal_fhr, total, { clinicalAlert: 'ABNORMAL_FHR' }),
+      analyticsBar('DJJ tidak terdeteksi', summary.alert_fhr_not_detected, total, { clinicalAlert: 'FHR_NOT_DETECTED' }),
+      analyticsBar('Tinggi fundus tidak sesuai usia kehamilan', summary.alert_fundal_mismatch, total, { clinicalAlert: 'FUNDAL_HEIGHT_MISMATCH' }),
+      analyticsBar('Kecurigaan hasil USG abnormal', summary.alert_usg_abnormal, total, { clinicalAlert: 'ABNORMAL_USG_SUSPECTED' })
+    ], 'alert');
+    renderAnalyticsBars('analyticsCoverageChart', [
+      analyticsBar('Tekanan darah', summary.coverage_bp, total, {}),
+      analyticsBar('LILA', summary.coverage_lila, total, {}),
+      analyticsBar('Hb', summary.coverage_hb, total, {}),
+      analyticsBar('Protein urine', summary.coverage_protein_urine, total, {})
+    ], 'coverage', false);
+    renderRiskAnalyticsPe(summary, total);
+    renderRiskAnalyticsBacklog(summary);
+    ['analyticsFactorState', 'analyticsDynamicState', 'analyticsDiagnosisState', 'analyticsPeState',
+      'analyticsAlertsState', 'analyticsCoverageState', 'analyticsBacklogState'].forEach(function(id) {
+      setAnalyticsModuleState(id, total ? '' : 'Tidak ada data pada kombinasi filter ini.', total ? '' : 'empty');
+    });
+  }
+
+  function analyticsBar(label, value, denominator, drill) {
+    return { label: label, value: analyticsCount(value), denominator: analyticsCount(denominator), drill: drill || {} };
+  }
+
+  function renderAnalyticsBars(containerId, items, tone, clickable) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.replaceChildren();
+    const values = items || [];
+    const maximum = Math.max.apply(null, values.map(function(item) { return item.value; }).concat([1]));
+    values.forEach(function(item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'analytics-bar-button';
+      const percent = analyticsPercentValue(item.value, item.denominator);
+      const tooltip = item.label + ': ' + analyticsFormatNumber(item.value) + ' kehamilan dari ' +
+        analyticsFormatNumber(item.denominator) + ' kehamilan dalam scope; ' + (percent == null ? 'Belum dapat dihitung' : percent.toFixed(1) + '%');
+      button.title = tooltip;
+      button.setAttribute('aria-label', tooltip);
+      if (clickable === false) {
+        button.classList.add('noninteractive');
+        button.setAttribute('aria-disabled', 'true');
+      } else {
+        button.addEventListener('click', function() { openAnalyticsDrillDown(item.drill); });
+      }
+      const label = document.createElement('span');
+      label.className = 'analytics-bar-label';
+      label.textContent = item.label;
+      const track = document.createElement('span');
+      track.className = 'analytics-bar-track';
+      const fill = document.createElement('span');
+      fill.className = 'analytics-bar-fill' + (tone ? ' ' + tone : '');
+      fill.style.width = (item.value / maximum * 100) + '%';
+      track.appendChild(fill);
+      const number = document.createElement('span');
+      number.className = 'analytics-bar-value';
+      number.textContent = analyticsFormatNumber(item.value) + ' · ' + (percent == null ? '—' : percent.toFixed(1) + '%');
+      button.append(label, track, number);
+      container.appendChild(button);
+    });
+  }
+
+  function renderRiskAnalyticsDynamic(summary) {
+    const container = document.getElementById('analyticsDynamicChart');
+    container.replaceChildren();
+    const rows = [
+      ['Anemia', summary.ever_anemia, summary.current_anemia, summary.anemia_assessed, 'ANEMIA'],
+      ['Hipertensi', summary.ever_hypertension, summary.current_hypertension, summary.hypertension_assessed, 'HYPERTENSION'],
+      ['KEK', summary.ever_kek, summary.current_kek, summary.kek_assessed, 'KEK'],
+      ['Skrining Mengarah ke Preeklampsia', summary.ever_suspect_preeclampsia, summary.current_suspect_preeclampsia, summary.suspect_preeclampsia_assessed, 'SUSPECT_PREECLAMPSIA']
+    ];
+    const maximum = Math.max.apply(null, rows.reduce(function(values, row) {
+      return values.concat([analyticsCount(row[1]), analyticsCount(row[2])]);
+    }, [1]));
+    rows.forEach(function(item) {
+      const ever = analyticsCount(item[1]);
+      const current = analyticsCount(item[2]);
+      const assessed = analyticsCount(item[3]);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'grouped-bar-row analytics-group-button';
+      row.title = item[0] + ' terkini: ' + analyticsFormatNumber(current) + ' dari ' + analyticsFormatNumber(assessed) +
+        ' kehamilan yang dapat dinilai; ' + analyticsPercentText(current, assessed);
+      row.addEventListener('click', function() { openAnalyticsDrillDown({ riskFactor: item[4] }); });
+      const header = document.createElement('span');
+      header.className = 'grouped-bar-header';
+      const headerLabel = document.createElement('span');
+      headerLabel.textContent = item[0];
+      const assessedLabel = document.createElement('span');
+      assessedLabel.textContent = 'Dapat dinilai ' + analyticsFormatNumber(assessed);
+      header.append(headerLabel, assessedLabel);
+      const tracks = document.createElement('span');
+      tracks.className = 'grouped-bar-tracks';
+      tracks.appendChild(analyticsGroupedTrack(ever, maximum, false));
+      tracks.appendChild(analyticsGroupedTrack(current, maximum, true));
+      row.append(header, tracks);
+      container.appendChild(row);
+    });
+    const legend = document.createElement('div');
+    legend.className = 'grouped-legend';
+    legend.innerHTML = '<span>Pernah Terdeteksi</span><span>Berdasarkan Pemeriksaan Terbaru</span>';
+    container.appendChild(legend);
+  }
+
+  function analyticsGroupedTrack(value, maximum, current) {
+    const track = document.createElement('span');
+    track.className = 'grouped-track';
+    const fill = document.createElement('span');
+    fill.className = 'grouped-fill' + (current ? ' current' : '');
+    fill.style.width = (value / maximum * 100) + '%';
+    const number = document.createElement('span');
+    if (value / maximum > .45) number.className = 'on-dark';
+    number.textContent = analyticsFormatNumber(value);
+    track.append(fill, number);
+    return track;
+  }
+
+  function renderRiskAnalyticsPe(summary, total) {
+    const container = document.getElementById('analyticsPeFlow');
+    container.replaceChildren();
+    [
+      ['Protein urine dinilai', summary.pe_protein_assessed, {}, 'Tanggal kunjungan ANC'],
+      ['Proteinuria positif', summary.pe_protein_positive, {}, 'Tanggal kunjungan ANC'],
+      ['Tekanan darah + protein dinilai pada hari klinis yang sama', summary.pe_bp_protein_same_day, {}, 'Tanggal kunjungan ANC'],
+      ['Skrining Mengarah ke Preeklampsia', summary.ever_suspect_preeclampsia, { riskFactor: 'SUSPECT_PREECLAMPSIA' }, 'Evidence pernah pada tingkat kehamilan'],
+      ['Diagnosis preeklampsia dilaporkan', summary.diagnosis_preeclampsia, { diagnosis: 'PREECLAMPSIA_REPORTED' }, 'Diagnosis pada tingkat kehamilan']
+    ].forEach(function(item) {
+      const stage = document.createElement('button');
+      stage.type = 'button';
+      stage.className = 'pe-stage';
+      stage.title = item[0] + ': ' + analyticsFormatNumber(item[1]) + ' kehamilan unik dari ' + analyticsFormatNumber(total) + ' dalam scope.';
+      stage.addEventListener('click', function() { openAnalyticsDrillDown(item[2]); });
+      const label = document.createElement('span');
+      label.textContent = item[0];
+      const count = document.createElement('strong');
+      count.textContent = analyticsFormatNumber(item[1]);
+      const basis = document.createElement('small');
+      basis.textContent = item[3];
+      stage.append(label, count, basis);
+      container.appendChild(stage);
+    });
+  }
+
+  function renderRiskAnalyticsBacklog(summary) {
+    const container = document.getElementById('analyticsBacklog');
+    container.replaceChildren();
+    [
+      ['≥42 minggu, luaran belum tercatat', summary.over_42w_no_outcome, { monitoringStatus: 'OVER_42W_NO_OUTCOME', clearClinicalFilters: true }],
+      ['Dating tidak dapat ditentukan', summary.dating_unknown, { monitoringStatus: 'NO_OUTCOME_DATING_UNKNOWN', clearClinicalFilters: true }],
+      ['Perlu Penilaian Ulang Preeklampsia', summary.preeclampsia_reassessment_needed, { monitoringStatus: 'ALL', followUp: 'PREECLAMPSIA_REASSESSMENT', clearClinicalFilters: true }]
+    ].forEach(function(item) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'backlog-card';
+      card.addEventListener('click', function() { openAnalyticsDrillDown(item[2]); });
+      const label = document.createElement('span');
+      label.textContent = item[0];
+      const count = document.createElement('strong');
+      count.textContent = analyticsFormatNumber(item[1]);
+      card.append(label, count);
+      container.appendChild(card);
+    });
+  }
+
+  function renderRiskAnalyticsFreshness(result) {
+    const generated = result && result.generatedAt ? new Date(result.generatedAt) : null;
+    const generatedText = generated && !Number.isNaN(generated.getTime())
+      ? new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short' }).format(generated) + ' WITA'
+      : 'belum tersedia';
+    const latest = result && result.summary ? result.summary.latest_clinical_record_date : null;
+    setTextContent('analyticsFreshness', 'Data terakhir diperbarui: ' + generatedText + ' · Evidence klinis terbaru dalam scope: ' + formatDate(latest));
+  }
+
+  function renderRiskAnalyticsTrends(result) {
+    const rows = result && result.rows ? result.rows : [];
+    renderAnalyticsLineChart('analyticsRiskTrend', rows, ['risk_detected']);
+    renderRiskAnalyticsFactorTrend();
+    setAnalyticsModuleState('analyticsTrendState', rows.length ? '' : 'Tidak ada data pada kombinasi filter ini.', rows.length ? '' : 'empty');
+    setAnalyticsModuleState('analyticsFactorTrendState', rows.length ? '' : 'Tidak ada data pada kombinasi filter ini.', rows.length ? '' : 'empty');
+  }
+
+  function renderRiskAnalyticsFactorTrend() {
+    const rows = RiskAnalyticsState.trend && RiskAnalyticsState.trend.rows ? RiskAnalyticsState.trend.rows : [];
+    const selected = Array.from(document.querySelectorAll('.factor-toggle-list input:checked')).map(function(input) { return input.value; }).slice(0, 4);
+    renderAnalyticsLineChart('analyticsFactorTrend', rows, selected);
+  }
+
+  function renderAnalyticsLineChart(containerId, rows, seriesKeys) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.replaceChildren();
+    if (!rows.length || !seriesKeys.length) {
+      const empty = document.createElement('div');
+      empty.className = 'analytics-empty';
+      empty.textContent = seriesKeys.length ? 'Tidak ada data pada kombinasi filter ini.' : 'Pilih setidaknya satu faktor.';
+      container.appendChild(empty);
+      return;
+    }
+    const width = 920;
+    const height = 300;
+    const margin = { top: 24, right: 24, bottom: 52, left: 58 };
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
+    const maximum = Math.max.apply(null, rows.reduce(function(values, row) {
+      return values.concat(seriesKeys.map(function(key) { return analyticsCount(row[key]); }));
+    }, [1]));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Grafik tren per bulan');
+    for (let tick = 0; tick <= 4; tick += 1) {
+      const y = margin.top + plotHeight - (tick / 4 * plotHeight);
+      const line = analyticsSvgElement('line', { x1: margin.left, y1: y, x2: width - margin.right, y2: y, class: 'chart-grid-line' });
+      svg.appendChild(line);
+      const label = analyticsSvgElement('text', { x: margin.left - 10, y: y + 4, 'text-anchor': 'end', class: 'chart-axis-label' });
+      label.textContent = analyticsFormatCompact(maximum * tick / 4);
+      svg.appendChild(label);
+    }
+    const labelEvery = Math.max(1, Math.ceil(rows.length / 8));
+    rows.forEach(function(row, index) {
+      if (index % labelEvery !== 0 && index !== rows.length - 1) return;
+      const x = margin.left + (rows.length === 1 ? plotWidth / 2 : index / (rows.length - 1) * plotWidth);
+      const label = analyticsSvgElement('text', { x: x, y: height - 22, 'text-anchor': 'middle', class: 'chart-axis-label' });
+      label.textContent = analyticsMonthLabel(row.month);
+      svg.appendChild(label);
+    });
+    seriesKeys.forEach(function(key) {
+      const series = ANALYTICS_SERIES[key];
+      if (!series) return;
+      const points = rows.map(function(row, index) {
+        const x = margin.left + (rows.length === 1 ? plotWidth / 2 : index / (rows.length - 1) * plotWidth);
+        const y = margin.top + plotHeight - (analyticsCount(row[key]) / maximum * plotHeight);
+        return { x: x, y: y, row: row };
+      });
+      const path = analyticsSvgElement('polyline', {
+        points: points.map(function(point) { return point.x + ',' + point.y; }).join(' '),
+        class: 'chart-line', stroke: series.color
+      });
+      svg.appendChild(path);
+      points.forEach(function(point) {
+        const circle = analyticsSvgElement('circle', {
+          cx: point.x, cy: point.y, r: 5, fill: series.color, class: 'chart-point', tabindex: 0
+        });
+        const title = analyticsSvgElement('title', {});
+        title.textContent = series.label + ' · ' + analyticsMonthLongLabel(point.row.month) + ': ' +
+          analyticsFormatNumber(point.row[key]) + ' kehamilan unik. Klik untuk BNBA periode bulan ini.';
+        circle.appendChild(title);
+        const open = function() {
+          const range = analyticsMonthRange(point.row.month);
+          const override = { period: 'CUSTOM', periodStart: range.start, periodEnd: range.end };
+          if (series.riskFactor) override.riskFactor = series.riskFactor;
+          openAnalyticsDrillDown(override);
+        };
+        circle.addEventListener('click', open);
+        circle.addEventListener('keydown', function(event) {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+        });
+        svg.appendChild(circle);
+      });
+    });
+    container.appendChild(svg);
+    const legend = document.createElement('div');
+    legend.className = 'chart-legend';
+    seriesKeys.forEach(function(key) {
+      const item = document.createElement('span');
+      item.style.setProperty('--legend-color', ANALYTICS_SERIES[key].color);
+      item.textContent = ANALYTICS_SERIES[key].label;
+      legend.appendChild(item);
+    });
+    container.appendChild(legend);
+  }
+
+  function analyticsSvgElement(name, attributes) {
+    const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+    Object.keys(attributes || {}).forEach(function(key) { element.setAttribute(key, attributes[key]); });
+    return element;
+  }
+
+  function renderRiskAnalyticsRegional(result) {
+    RiskAnalyticsState.regional = result;
+    const comparison = result && result.comparison ? result.comparison : [];
+    const level = result && result.comparisonLevel === 'DESA' ? 'Desa' : 'Puskesmas';
+    setTextContent('analyticsRegionalTitle', 'Proporsi Kehamilan Risiko Tinggi menurut ' + level);
+    renderRiskAnalyticsRegionalBars();
+    renderRiskAnalyticsHeatmap(result && result.heatmap ? result.heatmap : []);
+    setAnalyticsModuleState('analyticsRegionalState', comparison.length ? '' : 'Tidak ada data pada kombinasi filter ini.', comparison.length ? '' : 'empty');
+    setAnalyticsModuleState('analyticsHeatmapState', result && result.heatmap && result.heatmap.length ? '' : 'Tidak ada data pada kombinasi filter ini.', result && result.heatmap && result.heatmap.length ? '' : 'empty');
+  }
+
+  function setAnalyticsRegionalMetric(metric) {
+    RiskAnalyticsState.regionalMetric = metric === 'COUNT' ? 'COUNT' : 'PERCENT';
+    document.getElementById('analyticsRegionPct').classList.toggle('active', RiskAnalyticsState.regionalMetric === 'PERCENT');
+    document.getElementById('analyticsRegionCount').classList.toggle('active', RiskAnalyticsState.regionalMetric === 'COUNT');
+    renderRiskAnalyticsRegionalBars();
+  }
+
+  function renderRiskAnalyticsRegionalBars() {
+    const result = RiskAnalyticsState.regional || {};
+    const rows = (result.comparison || []).filter(function(row) { return analyticsCount(row.denominator) > 0; });
+    const percentMode = RiskAnalyticsState.regionalMetric === 'PERCENT';
+    rows.sort(function(a, b) {
+      const aValue = percentMode ? (analyticsPercentValue(a.high_risk, a.denominator) || 0) : analyticsCount(a.high_risk);
+      const bValue = percentMode ? (analyticsPercentValue(b.high_risk, b.denominator) || 0) : analyticsCount(b.high_risk);
+      return bValue - aValue || analyticsCount(b.denominator) - analyticsCount(a.denominator) || String(a.region).localeCompare(String(b.region), 'id');
+    });
+    const maximum = Math.max.apply(null, rows.map(function(row) {
+      return percentMode ? (analyticsPercentValue(row.high_risk, row.denominator) || 0) : analyticsCount(row.high_risk);
+    }).concat([1]));
+    const container = document.getElementById('analyticsRegionalChart');
+    container.replaceChildren();
+    rows.slice(0, 20).forEach(function(row) {
+      const value = percentMode ? (analyticsPercentValue(row.high_risk, row.denominator) || 0) : analyticsCount(row.high_risk);
+      const percent = analyticsPercentValue(row.high_risk, row.denominator);
+      const drill = result.comparisonLevel === 'DESA'
+        ? { desa: row.region, riskStatus: 'HIGH_RISK' }
+        : { puskesmas: row.region, desa: null, riskStatus: 'HIGH_RISK' };
+      const item = analyticsBar(highRiskLocationLabel(row.region), row.high_risk, row.denominator, drill);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'analytics-bar-button';
+      button.title = highRiskLocationLabel(row.region) + ': ' + analyticsFormatNumber(row.high_risk) + ' high-risk dari ' +
+        analyticsFormatNumber(row.denominator) + ' kehamilan; ' + (percent == null ? 'Belum dapat dihitung' : percent.toFixed(1) + '%');
+      button.addEventListener('click', function() { openAnalyticsDrillDown(item.drill); });
+      const label = document.createElement('span'); label.className = 'analytics-bar-label'; label.textContent = item.label;
+      const track = document.createElement('span'); track.className = 'analytics-bar-track';
+      const fill = document.createElement('span'); fill.className = 'analytics-bar-fill regional'; fill.style.width = (value / maximum * 100) + '%';
+      const number = document.createElement('span'); number.className = 'analytics-bar-value';
+      number.textContent = percentMode ? (percent == null ? '—' : percent.toFixed(1) + '%') : analyticsFormatNumber(row.high_risk);
+      track.appendChild(fill); button.append(label, track, number); container.appendChild(button);
+    });
+  }
+
+  function renderRiskAnalyticsHeatmap(rows) {
+    const container = document.getElementById('analyticsHeatmap');
+    container.replaceChildren();
+    if (!rows.length) return;
+    const factors = [
+      ['anemia', 'Anemia', { riskFactor: 'ANEMIA' }],
+      ['hypertension', 'Hipertensi', { riskFactor: 'HYPERTENSION' }],
+      ['kek', 'KEK', { riskFactor: 'KEK' }],
+      ['age_gt35', 'Usia >35', { riskFactor: 'AGE_GT35' }],
+      ['age_lt20', 'Usia <20', { riskFactor: 'AGE_LT20' }],
+      ['suspect_preeclampsia', 'Suspect PE', { riskFactor: 'SUSPECT_PREECLAMPSIA' }],
+      ['diabetes', 'Diabetes', { diagnosis: 'DIABETES_IN_PREGNANCY_REPORTED' }],
+      ['multiple_pregnancy', 'Kehamilan ganda', { diagnosis: 'MULTIPLE_PREGNANCY_REPORTED' }]
+    ];
+    const grid = document.createElement('div');
+    grid.className = 'analytics-heatmap';
+    grid.style.gridTemplateColumns = 'minmax(150px, 1.35fr) repeat(' + factors.length + ', minmax(82px, 1fr))';
+    const corner = document.createElement('span'); corner.className = 'heatmap-cell header'; corner.textContent = 'Puskesmas'; grid.appendChild(corner);
+    factors.forEach(function(factor) {
+      const header = document.createElement('span'); header.className = 'heatmap-cell header'; header.textContent = factor[1]; grid.appendChild(header);
+    });
+    rows.sort(function(a, b) { return analyticsCount(b.denominator) - analyticsCount(a.denominator); }).forEach(function(row) {
+      const rowHeader = document.createElement('span'); rowHeader.className = 'heatmap-cell row-header'; rowHeader.textContent = highRiskLocationLabel(row.region); grid.appendChild(rowHeader);
+      factors.forEach(function(factor) {
+        const count = analyticsCount(row[factor[0]]);
+        const denominator = analyticsCount(row.denominator);
+        const percent = analyticsPercentValue(count, denominator);
+        const cell = document.createElement('button');
+        cell.type = 'button';
+        cell.className = 'heatmap-cell';
+        cell.textContent = percent == null ? '—' : percent.toFixed(1) + '%';
+        cell.style.background = analyticsHeatColor(percent || 0);
+        cell.title = highRiskLocationLabel(row.region) + ' × ' + factor[1] + ': ' + analyticsFormatNumber(count) +
+          ' dari ' + analyticsFormatNumber(denominator) + ' kehamilan; ' + (percent == null ? 'Belum dapat dihitung' : percent.toFixed(1) + '%');
+        cell.addEventListener('click', function() {
+          openAnalyticsDrillDown(Object.assign({ puskesmas: row.region, desa: null }, factor[2]));
+        });
+        grid.appendChild(cell);
+      });
+    });
+    container.appendChild(grid);
+  }
+
+  function analyticsHeatColor(percent) {
+    const strength = Math.min(1, Math.max(0, percent / 50));
+    const lightness = 96 - strength * 42;
+    return 'hsl(168 38% ' + lightness + '%)';
+  }
+
+  async function openAnalyticsDrillDown(overrides) {
+    const base = Object.assign({}, RiskAnalyticsState.filters || readRiskAnalyticsFilters());
+    const requested = Object.assign(base, overrides || {});
+    if (requested.clearClinicalFilters) {
+      requested.riskStatus = 'ALL';
+      requested.riskFactor = 'ALL';
+      requested.diagnosis = 'ALL';
+      requested.clinicalAlert = 'ALL';
+    }
+    if (overrides && overrides.riskFactor) requested.diagnosis = 'ALL';
+    if (overrides && overrides.diagnosis) requested.riskFactor = 'ALL';
+    navigateTo('high-risk');
+    await initializeHighRiskPage();
+    const operationalFactor = requested.riskFactor && requested.riskFactor !== 'ALL'
+      ? requested.riskFactor
+      : (requested.diagnosis && requested.diagnosis !== 'ALL' ? requested.diagnosis : 'ALL');
+    const listFilters = {
+      monitoringStatus: requested.monitoringStatus || 'ALL',
+      riskStatus: requested.riskStatus || 'ALL',
+      puskesmas: requested.puskesmas || null,
+      desa: requested.desa || null,
+      riskFactor: operationalFactor,
+      clinicalAlert: requested.clinicalAlert || 'ALL',
+      followUp: requested.followUp || 'ALL',
+      evidencePeriod: requested.period || 'ALL',
+      periodStart: requested.periodStart || null,
+      periodEnd: requested.periodEnd || null
+    };
+    setOperationalFilterValue('hrMonitoringStatus', listFilters.monitoringStatus);
+    setOperationalFilterValue('hrRiskStatus', listFilters.riskStatus);
+    setOperationalFilterValue('hrPuskesmas', listFilters.puskesmas || '');
+    updateHighRiskDesaOptions();
+    setOperationalFilterValue('hrDesa', listFilters.desa || '');
+    setOperationalFilterValue('hrRiskFactor', listFilters.riskFactor);
+    setOperationalFilterValue('hrClinicalAlert', listFilters.clinicalAlert);
+    setOperationalFilterValue('hrFollowUp', listFilters.followUp);
+    HighRiskState.listFilters = listFilters;
+    HighRiskState.listPage = 1;
+    showHighRiskView('list');
+    await loadHighRiskList();
+  }
+
+  function setOperationalFilterValue(id, value) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    const normalized = value == null ? '' : String(value);
+    if (Array.from(element.options).some(function(option) { return option.value === normalized; })) element.value = normalized;
+  }
+
+  function analyticsScopeLabel(filters) {
+    const f = filters || {};
+    return monitoringStatusLabel(f.monitoringStatus) + ' · Evidence ' + analyticsPeriodLabel(f);
+  }
+
+  function analyticsPeriodLabel(filters) {
+    const f = filters || {};
+    const labels = { '30D': '30 hari', '3M': '3 bulan', '6M': '6 bulan', '12M': '12 bulan', 'ALL': 'semua periode' };
+    if (f.period === 'CUSTOM') return formatDate(f.periodStart) + ' s.d. ' + formatDate(f.periodEnd);
+    return labels[f.period] || '6 bulan';
+  }
+
+  function analyticsCount(value) { return Number(value) || 0; }
+  function analyticsFormatNumber(value) { return new Intl.NumberFormat('id-ID').format(analyticsCount(value)); }
+  function analyticsFormatCompact(value) { return new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 }).format(analyticsCount(value)); }
+  function analyticsPercentValue(value, denominator) {
+    const d = analyticsCount(denominator);
+    return d ? analyticsCount(value) / d * 100 : null;
+  }
+  function analyticsPercentText(value, denominator) {
+    const percent = analyticsPercentValue(value, denominator);
+    return percent == null ? 'Belum dapat dihitung' : percent.toFixed(1) + '% (' + analyticsFormatNumber(value) + ' dari ' + analyticsFormatNumber(denominator) + ')';
+  }
+  function analyticsMonthLabel(value) {
+    const date = new Date(String(value).slice(0, 10) + 'T00:00:00Z');
+    return Number.isNaN(date.getTime()) ? String(value || '-') : new Intl.DateTimeFormat('id-ID', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(date);
+  }
+  function analyticsMonthLongLabel(value) {
+    const date = new Date(String(value).slice(0, 10) + 'T00:00:00Z');
+    return Number.isNaN(date.getTime()) ? String(value || '-') : new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+  }
+  function analyticsMonthRange(value) {
+    const text = String(value || '').slice(0, 10);
+    const date = new Date(text + 'T00:00:00Z');
+    if (Number.isNaN(date.getTime())) return { start: text, end: text };
+    const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+    return { start: text.slice(0, 7) + '-01', end: end.toISOString().slice(0, 10) };
+  }
+</script>

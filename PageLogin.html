@@ -1,0 +1,59 @@
+<section id="loginPage" class="login-page">
+  <div class="login-panel">
+    <div class="login-intro">
+      <div class="brand-mark large">M</div>
+      <p class="eyebrow">Sistem informasi maternal</p>
+      <h1 id="loginTitle">Dashboard Maternal</h1>
+      <p id="loginSubtitle">Riwayat klinis maternal</p>
+      <ul class="feature-list">
+        <li>Akses hanya untuk pengguna terdaftar</li>
+        <li>Alur pasien, kehamilan, dan event klinis</li>
+        <li>Provenance dan konflik data tetap terlihat</li>
+      </ul>
+    </div>
+
+    <div class="login-card">
+      <div>
+        <p class="eyebrow">Selamat datang</p>
+        <h2>Masuk ke aplikasi</h2>
+        <p class="muted">Gunakan akun yang telah dibuat oleh administrator.</p>
+      </div>
+      <form id="loginForm">
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" name="email" type="email" autocomplete="username" required>
+        <label for="loginPassword">Kata sandi</label>
+        <div class="password-field">
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+          <button type="button" class="password-toggle" onclick="togglePassword('loginPassword', this)" aria-label="Tampilkan kata sandi">Lihat</button>
+        </div>
+        <div id="loginMessage" aria-live="polite"></div>
+        <button id="loginButton" class="button button-primary full-width" type="submit">Masuk</button>
+        <small id="appVersion" class="version-label">Versi aplikasi</small>
+      </form>
+    </div>
+  </div>
+</section>
+
+<dialog id="passwordDialog" class="dialog">
+  <form id="passwordForm" method="dialog">
+    <div class="dialog-header">
+      <div>
+        <p class="eyebrow">Keamanan akun</p>
+        <h2>Ganti kata sandi</h2>
+      </div>
+      <button id="passwordDialogClose" class="icon-button" type="button" onclick="closePasswordDialog()" aria-label="Tutup">&times;</button>
+    </div>
+    <p id="passwordRequirement" class="muted"></p>
+    <label for="currentPassword">Kata sandi saat ini</label>
+    <input id="currentPassword" type="password" autocomplete="current-password" required>
+    <label for="newPassword">Kata sandi baru</label>
+    <input id="newPassword" type="password" autocomplete="new-password" required>
+    <label for="confirmPassword">Ulangi kata sandi baru</label>
+    <input id="confirmPassword" type="password" autocomplete="new-password" required>
+    <div id="passwordMessage" aria-live="polite"></div>
+    <div class="dialog-actions">
+      <button id="passwordCancel" class="button button-secondary" type="button" onclick="closePasswordDialog()">Batal</button>
+      <button class="button button-primary" type="submit">Simpan kata sandi</button>
+    </div>
+  </form>
+</dialog>

@@ -1,0 +1,130 @@
+<section id="page-home" class="page active">
+  <div class="page-heading clinical-heading">
+    <div>
+      <p class="eyebrow">Data klinis maternal</p>
+      <h1>Riwayat kehamilan pasien</h1>
+      <p class="muted">Cari pasien, pilih episode kehamilan, lalu tinjau perjalanan klinisnya.</p>
+    </div>
+    <span class="status-pill">Pasien → Kehamilan → Peristiwa klinis</span>
+  </div>
+
+  <div id="clinicalMessage" aria-live="polite"></div>
+
+  <section id="patientSearchView" class="clinical-view">
+    <article class="card search-card">
+      <form id="patientSearchForm" class="patient-search-form">
+        <div class="search-copy">
+          <label for="patientSearchInput">Cari pasien</label>
+          <small class="muted">Gunakan NIK atau telepon untuk hasil paling tepat. Nama dapat menghasilkan beberapa pasien.</small>
+        </div>
+        <div class="search-controls">
+          <input id="patientSearchInput" type="search" maxlength="100" autocomplete="off"
+            placeholder="Contoh: 5201..., 0812..., atau Siti Aminah" required>
+          <button id="patientSearchButton" class="button button-primary" type="submit">Cari pasien</button>
+        </div>
+      </form>
+    </article>
+
+    <div id="patientSearchStatus" class="inline-state" aria-live="polite">
+      <strong>Mulai dengan pencarian pasien.</strong>
+      <span>Hasil dibatasi dan identitas sensitif ditampilkan dalam bentuk tersamarkan.</span>
+    </div>
+    <div id="patientResultsToolbar" class="results-toolbar" hidden>
+      <div>
+        <strong id="patientResultsCount">0 hasil</strong>
+        <span id="patientResultsHint" class="muted"></span>
+      </div>
+      <button id="showMorePatientsButton" class="button button-secondary" type="button" onclick="showMorePatients()" hidden>
+        Tampilkan lebih banyak
+      </button>
+    </div>
+    <div id="patientSearchResults" class="patient-results" role="list"></div>
+  </section>
+
+  <section id="patientDetailView" class="clinical-view" hidden>
+    <button class="back-button" type="button" onclick="backToPatientSearch()">← Kembali ke pencarian</button>
+    <article class="card patient-profile-card">
+      <div>
+        <p class="eyebrow">Profil pasien</p>
+        <h2 id="patientDetailName">-</h2>
+        <p id="patientDetailIdentity" class="muted">-</p>
+      </div>
+      <dl id="patientDetailFacts" class="fact-grid"></dl>
+      <div id="patientConflictNotice" class="conflict-banner" hidden>
+        Terdapat perbedaan data demografis antar sumber.
+      </div>
+    </article>
+
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Episode kehamilan</p>
+        <h2>Kehamilan yang tercatat</h2>
+      </div>
+      <span id="pregnancyCountLabel" class="muted"></span>
+    </div>
+    <div id="pregnancyListStatus" class="inline-state" aria-live="polite"></div>
+    <div id="pregnancyList" class="pregnancy-list"></div>
+  </section>
+
+  <section id="pregnancyDetailView" class="clinical-view" hidden>
+    <button class="back-button" type="button" onclick="backToPregnancyList()">← Kembali ke daftar kehamilan</button>
+
+    <article class="card patient-context-card">
+      <div class="patient-context-heading">
+        <div>
+          <p class="eyebrow">Profil pasien</p>
+          <h2 id="pregnancyPatientName">-</h2>
+          <p id="pregnancyPatientIdentity" class="muted">-</p>
+        </div>
+        <button class="text-button" type="button" onclick="backToPregnancyList()">Lihat semua kehamilan</button>
+      </div>
+      <dl id="pregnancyPatientFacts" class="fact-grid compact-fact-grid"></dl>
+      <div id="pregnancyPatientConflictNotice" class="conflict-banner" hidden>
+        Terdapat perbedaan data demografis antar sumber.
+      </div>
+    </article>
+
+    <article class="card pregnancy-overview-card">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">Ringkasan kehamilan</p>
+          <h2 id="pregnancyDetailTitle">Kehamilan</h2>
+        </div>
+        <span id="pregnancyOutcomeBadge" class="status-pill">-</span>
+      </div>
+      <dl id="pregnancyOverviewFacts" class="fact-grid overview-grid"></dl>
+      <div id="pregnancyVerificationNotice" class="verification-banner" hidden></div>
+    </article>
+
+    <article class="card anc-summary-card">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">Ringkasan pelayanan ANC / 12T</p>
+          <h2>Pemeriksaan yang tercatat pada K1-K6</h2>
+          <p class="muted anc-summary-help">
+            Ringkasan ini menunjukkan evidence yang tercatat. "Belum tercatat" tidak berarti pemeriksaan tidak dilakukan.
+          </p>
+        </div>
+        <span id="ancSummaryCoverage" class="status-pill neutral">Menunggu riwayat</span>
+      </div>
+      <div id="ancSummaryStatus" class="inline-state" aria-live="polite">
+        <strong>Memuat ringkasan pemeriksaan...</strong>
+      </div>
+      <div id="ancSummaryTable" class="anc-summary-table-wrap"></div>
+      <div id="ancSummaryUnclassified" class="data-scope-note" hidden></div>
+      <div class="data-scope-note">
+        Timeline v3 mendukung evidence 12T yang tercatat, termasuk Td, TTD/MMS, laboratorium, tata laksana, konseling, USG, dan skrining jiwa. Hanya presentasi janin terstruktur dan jadwal kunjungan ulang yang belum didukung. Aplikasi tidak menyimpulkan pelayanan dari data yang kosong.
+      </div>
+    </article>
+
+    <div class="section-heading timeline-heading">
+      <div>
+        <p class="eyebrow">Riwayat klinis</p>
+        <h2>Riwayat kehamilan</h2>
+      </div>
+      <span class="timeline-order-note">Terlama &rarr; terbaru</span>
+    </div>
+    <div id="timelineStatus" class="inline-state" aria-live="polite"></div>
+    <div id="clinicalTimeline" class="clinical-timeline"></div>
+  </section>
+</section>

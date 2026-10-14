@@ -1,0 +1,258 @@
+<section id="page-high-risk" class="page">
+  <div id="highRiskDashboardView" class="high-risk-view">
+    <div class="page-heading clinical-heading high-risk-heading">
+      <div>
+        <p class="eyebrow">MATNEO · Monitoring kehamilan</p>
+        <h1>Monitoring Risiko Kehamilan</h1>
+        <p class="muted">Temukan kehamilan aktif dengan risiko, alert klinis, konflik evidence, atau data yang perlu ditindaklanjuti.</p>
+        <p id="hrFreshness" class="freshness-note">Freshness data sedang dimuat...</p>
+      </div>
+      <button class="button button-secondary" type="button" onclick="navigateTo('home')">Cari pasien</button>
+    </div>
+
+    <div id="highRiskMessage" aria-live="polite"></div>
+
+    <form id="highRiskFilterForm" class="card high-risk-filter-card">
+      <div class="filter-heading">
+        <div>
+          <p class="eyebrow">Filter monitoring</p>
+          <h2>Ruang lingkup data</h2>
+        </div>
+        <button class="text-button" type="button" onclick="resetHighRiskFilters()">Atur ulang</button>
+      </div>
+      <div class="high-risk-filter-grid">
+        <label>Status kehamilan
+          <select id="hrMonitoringStatus">
+            <option value="ACTIVE_PREGNANCY">Kehamilan Aktif</option>
+            <option value="OVER_42W_NO_OUTCOME">≥42 Minggu, Belum Ada Luaran</option>
+            <option value="NO_OUTCOME_DATING_UNKNOWN">Luaran Belum Tercatat, Dating Tidak Diketahui</option>
+            <option value="DELIVERED">Melahirkan</option>
+            <option value="ABORTION">Abortus</option>
+            <option value="ALL">Semua</option>
+          </select>
+        </label>
+        <label>Status risiko
+          <select id="hrRiskStatus">
+            <option value="ALL">Semua</option>
+            <option value="URGENT">Perlu Evaluasi Segera</option>
+            <option value="HIGH_RISK">Risiko Tinggi</option>
+            <option value="CONFLICTING_EVIDENCE">Data Pemeriksaan Berbeda Antar Sumber</option>
+            <option value="NOT_ASSESSABLE">Belum Dapat Dinilai</option>
+            <option value="NO_HIGH_RISK_DETECTED">Tidak Terdeteksi Risiko Tinggi</option>
+          </select>
+        </label>
+        <label>Puskesmas
+          <select id="hrPuskesmas"><option value="">Semua Puskesmas</option></select>
+        </label>
+        <label>Desa
+          <select id="hrDesa"><option value="">Semua Desa</option></select>
+        </label>
+        <label>Faktor risiko
+          <select id="hrRiskFactor">
+            <option value="ALL">Semua faktor</option>
+            <optgroup label="Faktor Risiko">
+              <option value="AGE_LT20">Usia &lt;20</option>
+              <option value="AGE_GT35">Usia &gt;35</option>
+              <option value="SHORT_STATURE">Perawakan pendek</option>
+              <option value="KEK">KEK terkini</option>
+              <option value="ANEMIA">Anemia terkini</option>
+              <option value="HYPERTENSION">Hipertensi terkini</option>
+              <option value="SUSPECT_PREECLAMPSIA">Skrining Mengarah ke Preeklampsia</option>
+              <option value="HIV">HIV positif</option>
+              <option value="SYPHILIS">Sifilis positif</option>
+              <option value="HEPATITIS_B">Hepatitis B positif</option>
+              <option value="UNDERWEIGHT_EARLY_BMI">BMI awal &lt;18,5</option>
+              <option value="HIGH_PARITY">Paritas tinggi (&ge;4)</option>
+              <option value="SHORT_BIRTH_INTERVAL">Jarak kehamilan &lt;2 tahun</option>
+            </optgroup>
+            <optgroup label="Diagnosis / Kondisi Kehamilan">
+              <option value="GESTATIONAL_HYPERTENSION_REPORTED">Hipertensi gestasional</option>
+              <option value="PREECLAMPSIA_REPORTED">Preeklampsia</option>
+              <option value="SEVERE_PREECLAMPSIA_REPORTED">Preeklampsia berat</option>
+              <option value="ECLAMPSIA_REPORTED">Eklampsia</option>
+              <option value="DIABETES_IN_PREGNANCY_REPORTED">Diabetes dalam kehamilan</option>
+              <option value="MULTIPLE_PREGNANCY_REPORTED">Kehamilan ganda</option>
+              <option value="UTERINE_SCAR_REPORTED">Bekas luka uterus</option>
+              <option value="PLACENTA_PREVIA_REPORTED">Plasenta previa</option>
+            </optgroup>
+            <optgroup label="Riwayat / Evidence Historis">
+              <option value="MALPRESENTATION_REPORTED">Malpresentasi pernah dilaporkan</option>
+              <option value="BREECH_REPORTED">Presentasi sungsang</option>
+              <option value="OTHER_MALPRESENTATION_REPORTED">Malpresentasi lain</option>
+            </optgroup>
+          </select>
+        </label>
+        <label>Alert klinis
+          <select id="hrClinicalAlert">
+            <option value="ALL">Semua alert</option>
+            <option value="ABNORMAL_FHR">DJJ abnormal</option>
+            <option value="FHR_NOT_DETECTED">DJJ tidak terdeteksi</option>
+            <option value="FUNDAL_HEIGHT_MISMATCH">Tinggi fundus tidak sesuai</option>
+            <option value="ABNORMAL_USG_SUSPECTED">Kecurigaan USG abnormal</option>
+          </select>
+        </label>
+        <label>Tindak lanjut operasional
+          <select id="hrFollowUp">
+            <option value="ALL">Semua tindak lanjut</option>
+            <option value="PREECLAMPSIA_REASSESSMENT">Perlu Penilaian Ulang Preeklampsia</option>
+          </select>
+        </label>
+      </div>
+      <div class="filter-actions">
+        <span class="muted">Semua angka mengikuti filter di atas dan dihitung per <code>pregnancy_key</code>.</span>
+        <button id="hrApplyFilter" class="button button-primary" type="submit">Terapkan filter</button>
+      </div>
+    </form>
+
+    <div id="highRiskDashboardStatus" class="inline-state" aria-live="polite" hidden></div>
+
+    <section aria-labelledby="hrOverviewTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">Kabupaten</p><h2 id="hrOverviewTitle">Status risiko terkini</h2></div>
+        <button class="button button-secondary" type="button" onclick="openHighRiskList()">Lihat BNBA sesuai filter</button>
+      </div>
+      <div class="metric-card-grid">
+        <article class="metric-card primary"><span id="hrSelectedLabel">Kehamilan Aktif</span><strong id="hrMetricTotal">0</strong></article>
+        <article class="metric-card urgent"><span>Perlu Evaluasi Segera</span><strong id="hrMetricUrgent">0</strong></article>
+        <article class="metric-card high"><span>Risiko Tinggi</span><strong id="hrMetricHigh">0</strong></article>
+        <article class="metric-card conflict"><span>Data Pemeriksaan Berbeda Antar Sumber</span><strong id="hrMetricConflict">0</strong></article>
+        <article class="metric-card unknown"><span>Belum Dapat Dinilai</span><strong id="hrMetricUnknown">0</strong></article>
+        <article class="metric-card normal"><span>Tidak Terdeteksi Risiko Tinggi</span><strong id="hrMetricNormal">0</strong></article>
+      </div>
+    </section>
+
+    <section class="follow-up-grid" aria-label="Follow-up data">
+      <button class="follow-up-card" type="button" onclick="applyHighRiskMonitoringStatus('OVER_42W_NO_OUTCOME')">
+        <span>≥42 Minggu, Belum Ada Luaran</span><strong id="hrMetricOver42">0</strong>
+      </button>
+      <button class="follow-up-card" type="button" onclick="applyHighRiskMonitoringStatus('NO_OUTCOME_DATING_UNKNOWN')">
+        <span>Luaran Belum Tercatat, Dating Tidak Diketahui</span><strong id="hrMetricDatingUnknown">0</strong>
+      </button>
+      <button class="follow-up-card clinical-follow-up" type="button" onclick="applyHighRiskFollowUp('PREECLAMPSIA_REASSESSMENT')">
+        <span>Perlu Penilaian Ulang Preeklampsia</span><strong id="hrMetricPreeclampsiaReassessment">0</strong>
+      </button>
+    </section>
+
+    <div class="risk-panel-grid">
+      <section class="card risk-panel" aria-labelledby="hrPersistentTitle">
+        <div><p class="eyebrow">Faktor persisten</p><h2 id="hrPersistentTitle">Pernah ditemukan selama kehamilan</h2></div>
+        <div id="hrPersistentChart" class="risk-bars"></div>
+      </section>
+      <section class="card risk-panel" aria-labelledby="hrDynamicTitle">
+        <div><p class="eyebrow">Risiko dinamis</p><h2 id="hrDynamicTitle">Pernah vs pemeriksaan terbaru</h2></div>
+        <div class="table-wrap compact-table"><table>
+          <thead><tr><th>Faktor</th><th>Pernah Terdeteksi</th><th>Berdasarkan Pemeriksaan Terbaru</th><th>Sudah Dapat Dinilai</th></tr></thead>
+          <tbody id="hrDynamicBody"></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <section class="card risk-panel" aria-labelledby="hrDiagnosisOverviewTitle">
+      <div><p class="eyebrow">Terpisah dari faktor risiko dinamis</p><h2 id="hrDiagnosisOverviewTitle">Diagnosis &amp; Kondisi Obstetri</h2><p class="muted">Kondisi yang pernah tercatat pada kehamilan dalam scope terpilih.</p></div>
+      <div id="hrDiagnosisOverview" class="diagnosis-overview-grid"></div>
+    </section>
+
+    <section class="card risk-panel" aria-labelledby="hrAlertTitle">
+      <div class="section-heading compact">
+        <div><p class="eyebrow">Terpisah dari core high-risk</p><h2 id="hrAlertTitle">Alert Klinis</h2></div>
+        <span class="status-pill neutral"><span id="hrMetricAlerts">0</span> kehamilan dengan &ge;1 alert</span>
+      </div>
+      <p class="muted overlap-note">Satu kehamilan dapat memiliki lebih dari satu alert klinis. Alert tetap terpisah dari core high-risk.</p>
+      <div id="hrAlertChart" class="alert-summary-grid"></div>
+    </section>
+
+    <section class="card table-card location-card" aria-labelledby="hrLocationTitle">
+      <div class="table-toolbar">
+        <div><p class="eyebrow">Drill-down wilayah</p><h2 id="hrLocationTitle">Ringkasan Puskesmas</h2></div>
+        <span id="hrLocationHint" class="muted">Dikelompokkan berdasarkan lokasi ANC terbaru. Pilih Puskesmas untuk membuka ringkasan Desa.</span>
+      </div>
+      <div class="table-wrap"><table class="location-table">
+        <thead><tr>
+          <th id="hrLocationColumn">Lokasi ANC terbaru</th><th>Kehamilan</th><th>Risiko Tinggi</th>
+          <th>Evaluasi Segera</th><th>Data Berbeda</th><th>Belum Dinilai</th>
+          <th>Alert Klinis</th><th>Penilaian Ulang Preeklampsia</th><th>≥42 Minggu</th><th>Aksi</th>
+        </tr></thead>
+        <tbody id="hrLocationBody"></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <div id="highRiskListView" class="high-risk-view" hidden>
+    <button class="back-button" type="button" onclick="backToHighRiskDashboard()">← Kembali ke ringkasan</button>
+    <div class="page-heading clinical-heading">
+      <div><p class="eyebrow">Desa / BNBA</p><h1 id="hrListTitle">Daftar kehamilan</h1><p id="hrListScope" class="muted"></p></div>
+      <label class="compact-select">Urutkan
+        <select id="hrListSort" onchange="changeHighRiskSort()">
+          <option value="RISK_PRIORITY">Prioritas Risiko</option>
+          <option value="HPL_NEAREST">HPL Terdekat</option>
+          <option value="ANC_LATEST">ANC Terbaru</option>
+          <option value="NAME_ASC">Nama A-Z</option>
+        </select>
+      </label>
+    </div>
+    <div id="hrListStatus" class="inline-state" aria-live="polite"></div>
+    <div class="card table-card">
+      <div class="table-wrap"><table class="bnba-table">
+        <thead><tr>
+          <th>Nama Ibu</th><th>HPHT / HPL</th><th>GA / ANC terakhir</th><th>Status Kehamilan</th>
+          <th>Status Risiko</th><th>Faktor Risiko Terkini</th><th>Pernah Ada Risiko</th>
+          <th>Diagnosis / Kondisi</th><th>Evidence Risiko Terbaru</th><th>Tindak Lanjut</th>
+          <th>Alert Klinis</th><th>Lokasi / Kontak</th><th>Aksi</th>
+        </tr></thead>
+        <tbody id="hrListBody"></tbody>
+      </table></div>
+      <div class="pagination-bar">
+        <button id="hrPreviousPage" class="button button-secondary" type="button" onclick="changeHighRiskPage(-1)">Sebelumnya</button>
+        <span id="hrPageLabel" class="muted">Halaman 1</span>
+        <button id="hrNextPage" class="button button-secondary" type="button" onclick="changeHighRiskPage(1)">Berikutnya</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="highRiskDetailView" class="high-risk-view" hidden>
+    <button class="back-button" type="button" onclick="backToHighRiskList()">← Kembali ke BNBA</button>
+    <div id="hrDetailStatus" class="inline-state" aria-live="polite"></div>
+    <div id="hrDetailContent" hidden>
+      <article class="card patient-profile-card high-risk-detail-header">
+        <div class="detail-title-row">
+          <div><p class="eyebrow">Detail pregnancy</p><h1 id="hrDetailName">-</h1><p id="hrDetailIdentity" class="muted">-</p></div>
+          <span id="hrDetailRiskBadge" class="status-badge neutral">-</span>
+        </div>
+        <dl id="hrDetailIdentityFacts" class="fact-grid"></dl>
+      </article>
+
+      <div class="detail-section-grid">
+        <section class="card"><p class="eyebrow">Kehamilan</p><h2>Ringkasan kehamilan</h2><dl id="hrPregnancyFacts" class="fact-grid"></dl></section>
+        <section class="card"><p class="eyebrow">Risiko terkini</p><h2>Status Risiko Berdasarkan Pemeriksaan Terbaru</h2><div id="hrCurrentRisks" class="tag-list"></div><div class="reason-box"><strong>Mengapa pregnancy ini membutuhkan perhatian?</strong><ul id="hrRiskReasons"></ul></div></section>
+        <section class="card"><p class="eyebrow">Riwayat risiko</p><h2>Riwayat Risiko Selama Kehamilan</h2><div id="hrEverRisks" class="tag-list"></div></section>
+        <section class="card"><p class="eyebrow">Pemeriksaan terbaru</p><h2>Latest valid evidence per domain</h2><dl id="hrLatestMeasurements" class="fact-grid"></dl></section>
+      </div>
+
+      <section id="hrDetailAlertSection" class="card detail-wide-section" hidden>
+        <p class="eyebrow">Terpisah dari core high-risk</p><h2>Alert Klinis</h2><div id="hrDetailAlerts" class="tag-list"></div>
+      </section>
+      <section id="hrFollowUpSection" class="card detail-wide-section" hidden>
+        <p class="eyebrow">Tindak lanjut operasional</p>
+        <h2>Perlu Penilaian Ulang Preeklampsia</h2>
+        <p class="muted">Flag ini meminta penilaian ulang dan tidak mengubah status risiko menjadi Risiko Tinggi, Perlu Evaluasi Segera, atau Data Pemeriksaan Berbeda Antar Sumber.</p>
+      </section>
+      <section id="hrDiagnosisSection" class="card detail-wide-section" hidden>
+        <p class="eyebrow">Evidence diagnosis canonical</p>
+        <h2>Diagnosis dan Domain Hipertensif</h2>
+        <div id="hrDiagnosisEvidence" class="tag-list"></div>
+      </section>
+      <section id="hrEvidenceSection" class="card detail-wide-section">
+        <div id="hrConflictBanner" class="conflict-banner" hidden>Data Pemeriksaan Berbeda Antar Sumber. Evidence dipertahankan tanpa prioritas sumber arbitrer.</div>
+        <div class="section-heading compact"><div><p class="eyebrow">Record-level evidence</p><h2>Evidence pemeriksaan dan diagnosis</h2></div></div>
+        <div class="table-wrap"><table class="evidence-table"><thead><tr>
+          <th>Tanggal</th><th>Source</th><th>Lokasi</th><th>Hb</th><th>Tekanan darah</th>
+          <th>Protein urine</th><th>LiLA</th><th>Diagnosis</th><th>Interpretasi</th>
+        </tr></thead><tbody id="hrEvidenceBody"></tbody></table></div>
+      </section>
+      <section class="detail-wide-section">
+        <div class="section-heading"><div><p class="eyebrow">Clinical timeline</p><h2>Riwayat klinis</h2></div><span class="timeline-order-note">Terlama → terbaru</span></div>
+        <div id="hrTimeline" class="clinical-timeline"></div>
+      </section>
+    </div>
+  </div>
+</section>

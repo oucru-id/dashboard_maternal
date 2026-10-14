@@ -1,0 +1,1959 @@
+<script>
+  const AppState = {
+    config: null,
+    token: sessionStorage.getItem('maternalSessionToken') || '',
+    user: null,
+    users: [],
+    searchResults: [],
+    patientVisibleCount: 10,
+    selectedPatient: null,
+    pregnancies: [],
+    selectedPregnancy: null,
+    timeline: [],
+    loadingCount: 0
+  };
+
+  document.addEventListener('DOMContentLoaded', initializeApp);
+  const loginFormElement = document.getElementById('loginForm');
+  const passwordFormElement = document.getElementById('passwordForm');
+  const userFormElement = document.getElementById('userForm');
+  const patientSearchFormElement = document.getElementById('patientSearchForm');
+  const passwordDialogElement = document.getElementById('passwordDialog');
+  const menuButtonElement = document.getElementById('menuButton');
+  if (loginFormElement) loginFormElement.addEventListener('submit', handleLogin);
+  if (passwordFormElement) passwordFormElement.addEventListener('submit', handlePasswordChange);
+  if (userFormElement) userFormElement.addEventListener('submit', handleUserSave);
+  if (patientSearchFormElement) patientSearchFormElement.addEventListener('submit', handlePatientSearch);
+  if (passwordDialogElement) {
+    passwordDialogElement.addEventListener('cancel', function(event) {
+      if (event.currentTarget.dataset.forced === 'true') event.preventDefault();
+    });
+  }
+  if (menuButtonElement) {
+    menuButtonElement.addEventListener('click', function() {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) sidebar.classList.toggle('open');
+    });
+  }
+
+  async function initializeApp() {
+    setLoading(true, 'Menyiapkan aplikasi...');
+    try {
+      AppState.config = await callServer('getPublicConfig');
+      document.title = AppState.config.appTitle;
+      setTextContent('brandTitle', AppState.config.appTitle);
+      setTextContent('loginTitle', AppState.config.appTitle);
+      setTextContent('loginSubtitle', AppState.config.appSubtitle);
+      setTextContent('appVersion',
+        'Versi ' + (AppState.config.appVersion || '-') + ' - ' + (AppState.config.usersTable || '')
+      );
+      setTextContent('passwordRequirement',
+        'Minimal ' + AppState.config.passwordMinLength + ' karakter serta memuat huruf dan angka.'
+      );
+
+      if (AppState.token) {
+        try {
+          const result = await callServer('validateSession', AppState.token);
+          enterApplication(result.user);
+        } catch (error) {
+          clearLocalSession();
+          showLogin();
+        }
+      } else {
+        showLogin();
+      }
+    } catch (error) {
+      showMessage('loginMessage', error.message || String(error), 'error');
+      showLogin();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function callServer(functionName) {
+    const args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function(resolve, reject) {
+      const runner = google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(function(error) {
+          reject(new Error(error && error.message ? error.message : String(error)));
+        });
+      runner[functionName].apply(runner, args);
+    });
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const button = document.getElementById('loginButton');
+    button.disabled = true;
+    showMessage('loginMessage', '', '');
+    setLoading(true, 'Memverifikasi akun...');
+    try {
+      const result = await callServer('loginWithPassword', email, password);
+      AppState.token = result.token;
+      sessionStorage.setItem('maternalSessionToken', result.token);
+      document.getElementById('loginForm').reset();
+      enterApplication(result.user);
+    } catch (error) {
+      clearLocalSession();
+      showLogin();
+      showMessage('loginMessage', error.message, 'error');
+    } finally {
+      button.disabled = false;
+      setLoading(false);
+    }
+  }
+
+  function enterApplication(user) {
+    const loginPage = findElementByIds(['loginPage', 'page-login']);
+    const appShell = findElementByIds(['appShell', 'appContainer', 'mainApp', 'app-container']);
+    if (!loginPage || !appShell) {
+      throw new Error(
+        'Struktur halaman belum sinkron. Salin ulang index.html, PageLogin.html, Navigation.html, dan PageMain.html.'
+      );
+    }
+
+    AppState.user = user;
+    setTextContent('navUserName', user.nama || user.email);
+    setTextContent('navUserRole', roleLabel(user.role));
+    setTextContent('homeUserName', user.nama || user.email);
+    setTextContent('homeUserEmail', user.email);
+    setTextContent('homeUserRole', roleLabel(user.role));
+    const adminNav = document.getElementById('adminNav');
+    if (adminNav) adminNav.hidden = !user.isAdmin;
+
+    if (user.mustChangePassword) {
+      openPasswordDialog(true);
+      return;
+    }
+
+    setElementVisible(appShell, true);
+    setElementVisible(loginPage, false);
+    navigateTo('home');
+  }
+
+  function showLogin() {
+    const appShell = findElementByIds(['appShell', 'appContainer', 'mainApp', 'app-container']);
+    const loginPage = findElementByIds(['loginPage', 'page-login']);
+    if (appShell) setElementVisible(appShell, false);
+    if (loginPage) setElementVisible(loginPage, true);
+  }
+
+  async function handleLogout() {
+    const token = AppState.token;
+    clearLocalSession();
+    showLogin();
+    try {
+      if (token) await callServer('logout', token);
+    } catch (error) {
+      // Sesi lokal sudah dihapus; kegagalan cache server tidak menghalangi logout.
+    }
+  }
+
+  function clearLocalSession() {
+    sessionStorage.removeItem('maternalSessionToken');
+    AppState.token = '';
+    AppState.user = null;
+    AppState.users = [];
+    AppState.searchResults = [];
+    AppState.patientVisibleCount = 10;
+    AppState.selectedPatient = null;
+    AppState.pregnancies = [];
+    AppState.selectedPregnancy = null;
+    AppState.timeline = [];
+    if (typeof resetHighRiskState === 'function') resetHighRiskState();
+    if (typeof resetRiskAnalyticsState === 'function') resetRiskAnalyticsState();
+  }
+
+  function navigateTo(page) {
+    if (page === 'admin' && (!AppState.user || !AppState.user.isAdmin)) return;
+    const targetIds = page === 'home' ? ['page-home', 'page-main'] : ['page-' + page];
+    let targetFound = false;
+    document.querySelectorAll('.page').forEach(function(element) {
+      const isTarget = targetIds.indexOf(element.id) !== -1;
+      element.classList.toggle('active', isTarget);
+      if (isTarget) targetFound = true;
+    });
+    document.querySelectorAll('.nav-link').forEach(function(element) {
+      const navPage = element.dataset.page;
+      element.classList.toggle('active', navPage === page || (page === 'home' && navPage === 'main'));
+    });
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+    if (!targetFound) {
+      throw new Error('Halaman tujuan tidak ditemukan: ' + targetIds.join(' atau ') + '.');
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    if (page === 'admin') loadUsers();
+    if (page === 'high-risk' && typeof initializeHighRiskPage === 'function') initializeHighRiskPage();
+    if (page === 'risk-analytics' && typeof initializeRiskAnalyticsPage === 'function') initializeRiskAnalyticsPage();
+  }
+
+  function openPasswordDialog(forced) {
+    const dialog = document.getElementById('passwordDialog');
+    if (!dialog) {
+      throw new Error('Dialog ganti kata sandi tidak ditemukan. Salin ulang PageLogin.html.');
+    }
+    dialog.dataset.forced = forced ? 'true' : 'false';
+    const closeButton = document.getElementById('passwordDialogClose');
+    const cancelButton = document.getElementById('passwordCancel');
+    if (closeButton) closeButton.hidden = !!forced;
+    if (cancelButton) cancelButton.hidden = !!forced;
+    showMessage('passwordMessage', forced ? 'Anda wajib mengganti kata sandi sementara sebelum melanjutkan.' : '', forced ? 'warning' : '');
+    dialog.showModal();
+  }
+
+  function closePasswordDialog() {
+    const dialog = document.getElementById('passwordDialog');
+    if (dialog.dataset.forced === 'true') return;
+    dialog.close();
+    document.getElementById('passwordForm').reset();
+    showMessage('passwordMessage', '', '');
+  }
+
+  async function handlePasswordChange(event) {
+    event.preventDefault();
+    const currentPassword = document.getElementById('currentPassword').value;
+    const newPassword = document.getElementById('newPassword').value;
+    const confirmation = document.getElementById('confirmPassword').value;
+    if (newPassword !== confirmation) {
+      showMessage('passwordMessage', 'Konfirmasi kata sandi baru tidak sama.', 'error');
+      return;
+    }
+    setLoading(true, 'Mengganti kata sandi...');
+    try {
+      const result = await callServer('changeOwnPassword', AppState.token, currentPassword, newPassword);
+      document.getElementById('passwordDialog').close();
+      document.getElementById('passwordForm').reset();
+      clearLocalSession();
+      showLogin();
+      showMessage('loginMessage', result.message, 'success');
+    } catch (error) {
+      showMessage('passwordMessage', error.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePatientSearch(event) {
+    event.preventDefault();
+    const input = document.getElementById('patientSearchInput');
+    const button = document.getElementById('patientSearchButton');
+    const query = input ? input.value.trim() : '';
+    if (!query) {
+      setInlineState('patientSearchStatus', 'Masukkan NIK, nomor telepon, atau nama pasien.', '', 'warning');
+      return;
+    }
+
+    button.disabled = true;
+    AppState.searchResults = [];
+    AppState.patientVisibleCount = 10;
+    document.getElementById('patientSearchResults').replaceChildren();
+    document.getElementById('patientResultsToolbar').hidden = true;
+    setInlineState('patientSearchStatus', 'Mencari pasien...', 'Mohon tunggu sebentar.', 'loading');
+    try {
+      AppState.searchResults = await callServer('searchPatients', AppState.token, query);
+      renderPatientSearchResults();
+    } catch (error) {
+      handleClinicalError(error, 'patientSearchStatus');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function renderPatientSearchResults() {
+    const container = document.getElementById('patientSearchResults');
+    container.replaceChildren();
+    const results = AppState.searchResults || [];
+    if (!results.length) {
+      document.getElementById('patientResultsToolbar').hidden = true;
+      setInlineState('patientSearchStatus', 'Pasien tidak ditemukan.', 'Periksa kembali NIK, telepon, atau ejaan nama.', 'empty');
+      return;
+    }
+
+    const visibleCount = Math.min(AppState.patientVisibleCount, results.length);
+    const reachedLimit = results.length >= 50;
+    setInlineState(
+      'patientSearchStatus',
+      results.length + ' pasien ditemukan.',
+      reachedLimit
+        ? 'Hasil mencapai batas 50. Gunakan NIK, telepon, atau nama yang lebih lengkap untuk mempersempit pencarian.'
+        : 'Bandingkan tanggal lahir dan fasilitas sebelum membuka profil.',
+      reachedLimit ? 'warning' : 'success'
+    );
+
+    const toolbar = document.getElementById('patientResultsToolbar');
+    toolbar.hidden = false;
+    setTextContent('patientResultsCount', 'Menampilkan ' + visibleCount + ' dari ' + results.length + ' pasien');
+    setTextContent('patientResultsHint', visibleCount < results.length ? 'Muat bertahap agar daftar tetap mudah dibaca.' : 'Semua hasil telah ditampilkan.');
+    const showMoreButton = document.getElementById('showMorePatientsButton');
+    showMoreButton.hidden = visibleCount >= results.length;
+
+    results.slice(0, visibleCount).forEach(function(patient) {
+      const card = document.createElement('article');
+      card.className = 'card patient-result-card';
+      card.setAttribute('role', 'listitem');
+
+      const header = document.createElement('div');
+      header.className = 'patient-result-header';
+      const title = document.createElement('div');
+      const name = document.createElement('h2');
+      name.textContent = patient.nama_pasien || 'Nama tidak tersedia';
+      const identity = document.createElement('p');
+      identity.className = 'identity-line';
+      const nikChip = document.createElement('span');
+      nikChip.textContent = 'NIK ' + (patient.nik_masked || '-');
+      identity.appendChild(nikChip);
+      if (patient.phone_masked) {
+        const phoneChip = document.createElement('span');
+        phoneChip.textContent = 'Telepon ' + patient.phone_masked;
+        identity.appendChild(phoneChip);
+      }
+      title.append(name, identity);
+      const status = document.createElement('span');
+      status.className = 'status-badge neutral';
+      status.textContent = patientStatusLabel(patient.latest_pregnancy_status);
+      header.append(title, status);
+
+      const facts = document.createElement('dl');
+      facts.className = 'fact-grid result-facts';
+      appendFact(facts, 'Tanggal lahir', formatDate(patient.birth_date));
+      appendFact(facts, 'Fasilitas terakhir', cleanFacilityLabel(patient.latest_or_representative_facility));
+      appendFact(facts, 'Desa', cleanDisplayText(patient.latest_or_representative_desa));
+      appendFact(facts, 'Episode kehamilan', String(patient.pregnancy_count || 0));
+      appendFact(facts, 'ANC terakhir', formatDate(patient.latest_pregnancy_last_anc_date));
+
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'button button-secondary';
+      action.textContent = 'Buka profil pasien';
+      action.addEventListener('click', function() { selectPatient(patient.patient_key); });
+      card.append(header, facts, action);
+      container.appendChild(card);
+    });
+  }
+
+  function showMorePatients() {
+    AppState.patientVisibleCount += 10;
+    renderPatientSearchResults();
+  }
+
+  async function selectPatient(patientKey) {
+    const patient = (AppState.searchResults || []).find(function(item) {
+      return item.patient_key === patientKey;
+    });
+    if (!patient) return;
+
+    AppState.selectedPatient = patient;
+    AppState.pregnancies = [];
+    AppState.selectedPregnancy = null;
+    AppState.timeline = [];
+    renderPatientProfile(patient);
+    setClinicalView('patient');
+    document.getElementById('pregnancyList').replaceChildren();
+    setInlineState('pregnancyListStatus', 'Memuat episode kehamilan...', 'Mohon tunggu sebentar.', 'loading');
+    try {
+      AppState.pregnancies = await callServer('getPregnancies', AppState.token, patientKey);
+      renderPregnancyList();
+    } catch (error) {
+      handleClinicalError(error, 'pregnancyListStatus');
+    }
+  }
+
+  function renderPatientProfile(patient) {
+    setTextContent('patientDetailName', patient.nama_pasien || 'Nama tidak tersedia');
+    setTextContent('patientDetailIdentity', 'NIK ' + (patient.nik_masked || '-') +
+      (patient.phone_masked ? ' · Telepon ' + patient.phone_masked : ''));
+    const facts = document.getElementById('patientDetailFacts');
+    facts.replaceChildren();
+    appendFact(facts, 'Tanggal lahir', formatDate(patient.birth_date));
+    appendFact(facts, 'Fasilitas terakhir', cleanFacilityLabel(patient.latest_or_representative_facility));
+    appendFact(facts, 'Desa', cleanDisplayText(patient.latest_or_representative_desa));
+    appendFact(facts, 'Episode kehamilan', String(patient.pregnancy_count || 0));
+    const conflict = document.getElementById('patientConflictNotice');
+    conflict.hidden = patient.demographic_conflict_flag !== true;
+  }
+
+  function renderPregnancyPatientContext(patient) {
+    if (!patient) return;
+    setTextContent('pregnancyPatientName', patient.nama_pasien || 'Nama tidak tersedia');
+    setTextContent('pregnancyPatientIdentity', 'NIK ' + (patient.nik_masked || '-') +
+      (patient.phone_masked ? ' · Telepon ' + patient.phone_masked : ''));
+    const facts = document.getElementById('pregnancyPatientFacts');
+    facts.replaceChildren();
+    appendFact(facts, 'Tanggal lahir', formatDate(patient.birth_date));
+    appendFact(facts, 'Fasilitas terakhir', cleanFacilityLabel(patient.latest_or_representative_facility));
+    appendFact(facts, 'Desa', cleanDisplayText(patient.latest_or_representative_desa));
+    appendFact(facts, 'Episode kehamilan', String(patient.pregnancy_count || 0));
+    const conflict = document.getElementById('pregnancyPatientConflictNotice');
+    conflict.hidden = patient.demographic_conflict_flag !== true;
+  }
+
+  function renderPregnancyList() {
+    const container = document.getElementById('pregnancyList');
+    container.replaceChildren();
+    const pregnancies = AppState.pregnancies || [];
+    setTextContent('pregnancyCountLabel', pregnancies.length + ' episode');
+    if (!pregnancies.length) {
+      setInlineState('pregnancyListStatus', 'Data kehamilan belum tersedia.', '', 'empty');
+      return;
+    }
+    setInlineState('pregnancyListStatus', '', '', '');
+
+    pregnancies.forEach(function(pregnancy, index) {
+      const card = document.createElement('article');
+      card.className = 'card pregnancy-card';
+      const top = document.createElement('div');
+      top.className = 'pregnancy-card-top';
+      const title = document.createElement('div');
+      const heading = document.createElement('h3');
+      heading.textContent = 'Kehamilan ' + (pregnancies.length - index);
+      const period = document.createElement('p');
+      period.className = 'muted';
+      period.textContent = pregnancyPeriodLabel(pregnancy);
+      title.append(heading, period);
+      const badge = document.createElement('span');
+      badge.className = 'status-badge ' + outcomeBadgeClass(pregnancy.canonical_outcome_type);
+      badge.textContent = pregnancyOutcomeLabel(pregnancy);
+      top.append(title, badge);
+
+      const facts = document.createElement('dl');
+      facts.className = 'fact-grid result-facts';
+      appendFact(facts, 'HPHT', formatDate(pregnancy.canonical_hpht));
+      appendFact(facts, 'HPL', formatDate(pregnancy.canonical_hpl));
+      appendFact(facts, 'ANC pertama', formatDate(pregnancy.first_anc_date));
+      appendFact(facts, 'ANC terakhir', formatDate(pregnancy.last_anc_date));
+      appendFact(facts, 'Jumlah tanggal ANC', String(pregnancy.anc_visit_date_count || 0));
+      appendFact(facts, 'Sumber data', formatSources(pregnancy.source_systems));
+
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'button button-secondary';
+      action.textContent = 'Lihat riwayat klinis';
+      action.addEventListener('click', function() { selectPregnancy(pregnancy.pregnancy_key); });
+      card.append(top, facts, action);
+      container.appendChild(card);
+    });
+  }
+
+  async function selectPregnancy(pregnancyKey) {
+    const pregnancy = (AppState.pregnancies || []).find(function(item) {
+      return item.pregnancy_key === pregnancyKey;
+    });
+    if (!pregnancy) return;
+
+    AppState.selectedPregnancy = pregnancy;
+    AppState.timeline = [];
+    renderPregnancyPatientContext(AppState.selectedPatient);
+    renderPregnancyOverview(pregnancy);
+    renderAncServiceSummary(null);
+    setClinicalView('pregnancy');
+    document.getElementById('clinicalTimeline').replaceChildren();
+    setInlineState('timelineStatus', 'Memuat riwayat klinis...', 'Mohon tunggu sebentar.', 'loading');
+    try {
+      AppState.timeline = await callServer('getTimeline', AppState.token, pregnancyKey);
+      renderPregnancyOverview(pregnancy);
+      renderAncServiceSummary(AppState.timeline);
+      renderClinicalTimeline();
+    } catch (error) {
+      handleClinicalError(error, 'timelineStatus');
+    }
+  }
+
+  function renderPregnancyOverview(pregnancy) {
+    setTextContent('pregnancyDetailTitle', pregnancyPeriodLabel(pregnancy));
+    const outcomeBadge = document.getElementById('pregnancyOutcomeBadge');
+    outcomeBadge.textContent = pregnancyOutcomeLabel(pregnancy);
+    outcomeBadge.className = 'status-pill ' + outcomeBadgeClass(pregnancy.canonical_outcome_type);
+
+    const facts = document.getElementById('pregnancyOverviewFacts');
+    facts.replaceChildren();
+    appendFact(facts, 'HPHT', formatDate(pregnancy.canonical_hpht));
+    appendFact(facts, 'HPL', formatDate(pregnancy.canonical_hpl));
+    appendFact(facts, 'ANC pertama', formatDate(pregnancy.first_anc_date));
+    appendFact(facts, 'ANC terakhir', formatDate(pregnancy.last_anc_date));
+    appendFact(facts, 'Usia kehamilan pada ANC terakhir', latestAncGestationalAgeLabel());
+    const gpa = pregnancyGpaLabel(pregnancy);
+    if (gpa) appendFact(facts, 'GPA', gpa);
+    appendFact(facts, 'Jumlah tanggal ANC', String(pregnancy.anc_visit_date_count || 0));
+    appendFact(facts, 'Luaran', pregnancyOutcomeLabel(pregnancy));
+    if (pregnancy.canonical_outcome_date) {
+      appendFact(facts, 'Tanggal luaran', formatDate(pregnancy.canonical_outcome_date));
+    }
+    appendFact(facts, 'Pelayanan nifas', pregnancy.has_linked_pnc ? 'Tertaut' : 'Belum tertaut');
+
+    const notice = document.getElementById('pregnancyVerificationNotice');
+    const provisional = String(pregnancy.outcome_clinical_use_tier || '').toUpperCase() === 'PROVISIONAL';
+    notice.hidden = !provisional;
+    notice.textContent = provisional ? 'Data luaran perlu verifikasi lebih lanjut.' : '';
+  }
+
+  function latestAncGestationalAgeLabel() {
+    const ancEvents = (AppState.timeline || []).filter(function(event) {
+      return String(event.event_type || '').toUpperCase() === 'ANC' &&
+        isPresent(event.gestational_age_weeks);
+    });
+    if (!ancEvents.length) {
+      return AppState.timeline && AppState.timeline.length
+        ? 'Belum tersedia pada riwayat ANC'
+        : 'Menunggu riwayat ANC';
+    }
+    const latest = ancEvents[ancEvents.length - 1];
+    const visit = ancVisitCode(latest);
+    return valueWithUnit(latest.gestational_age_weeks, 'minggu') +
+      (visit ? ' (' + visit + ', ' + formatDate(latest.event_date) + ')' : ' (' + formatDate(latest.event_date) + ')');
+  }
+
+  function pregnancyGpaLabel(pregnancy) {
+    if (isPresent(pregnancy.gpa)) return cleanDisplayText(pregnancy.gpa);
+    const gravida = firstPresentValue([
+      pregnancy.gravida,
+      pregnancy.gravidity,
+      pregnancy.gravida_count,
+      pregnancy.g
+    ]);
+    const para = firstPresentValue([
+      pregnancy.para,
+      pregnancy.parity,
+      pregnancy.para_count,
+      pregnancy.p
+    ]);
+    const abortus = firstPresentValue([
+      pregnancy.abortus,
+      pregnancy.abortus_count,
+      pregnancy.abortion_count,
+      pregnancy.abortions,
+      pregnancy.a
+    ]);
+    if (!isPresent(gravida) || !isPresent(para) || !isPresent(abortus)) return '';
+    return 'G' + formatNumber(gravida) + ' P' + formatNumber(para) + ' A' + formatNumber(abortus);
+  }
+
+  function firstPresentValue(values) {
+    for (let index = 0; index < values.length; index += 1) {
+      if (isPresent(values[index])) return values[index];
+    }
+    return null;
+  }
+
+  function renderAncServiceSummary(events) {
+    const tableHost = document.getElementById('ancSummaryTable');
+    const coverage = document.getElementById('ancSummaryCoverage');
+    const unclassified = document.getElementById('ancSummaryUnclassified');
+    if (!tableHost || !coverage || !unclassified) return;
+    tableHost.replaceChildren();
+    unclassified.hidden = true;
+    unclassified.textContent = '';
+
+    if (events === null) {
+      coverage.textContent = 'Menunggu riwayat';
+      setInlineState('ancSummaryStatus', 'Memuat ringkasan pemeriksaan...', '', 'loading');
+      return;
+    }
+
+    const ancEvents = (events || []).filter(function(event) {
+      return String(event.event_type || '').toUpperCase() === 'ANC';
+    });
+    if (!ancEvents.length) {
+      coverage.textContent = '0 dari 6 kunjungan';
+      setInlineState('ancSummaryStatus', 'Belum ada peristiwa ANC.', 'Ringkasan pemeriksaan belum dapat dibuat.', 'empty');
+      return;
+    }
+
+    const visits = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6'];
+    const byVisit = {};
+    visits.forEach(function(visit) { byVisit[visit] = []; });
+    const otherAnc = [];
+    ancEvents.forEach(function(event) {
+      const visit = ancVisitCode(event);
+      if (visit && byVisit[visit]) byVisit[visit].push(event);
+      else otherAnc.push(event);
+    });
+
+    const recordedVisits = visits.filter(function(visit) { return byVisit[visit].length > 0; }).length;
+    coverage.textContent = recordedVisits + ' dari 6 kunjungan K tercatat';
+    setInlineState(
+      'ancSummaryStatus',
+      'Matriks 12T berdasarkan data timeline.',
+      'Nilai ditampilkan bila tersedia; tanda — berarti kunjungan K belum tercatat. Data kosong, tidak dilakukan, dan belum didukung dibedakan.',
+      'success'
+    );
+
+    const components = [
+      {
+        number: 1,
+        label: 'Timbang berat badan dan ukur tinggi badan',
+        note: 'Data terstruktur: berat badan dan tinggi badan',
+        display: bodyMeasurementDisplay
+      },
+      { number: 2, label: 'Ukur tekanan darah', note: 'Data terstruktur: sistolik dan diastolik', display: bloodPressureDisplay },
+      {
+        number: 3,
+        label: 'Nilai status gizi (LILA)',
+        note: 'Data terstruktur: lingkar lengan atas',
+        display: function(event) { return simpleClinicalDisplay(valueWithUnit(event.lila_cm, 'cm')); }
+      },
+      {
+        number: 4,
+        label: 'Ukur tinggi fundus uteri',
+        note: 'Data terstruktur: tinggi fundus',
+        display: function(event) { return simpleClinicalDisplay(clinicalValueLabel(event.fundal_height)); }
+      },
+      {
+        number: 5,
+        label: 'Tentukan presentasi janin dan DJJ',
+        note: 'Data terstruktur saat ini: DJJ; presentasi janin belum tersedia',
+        display: fetalAssessmentDisplay
+      },
+      {
+        number: 6,
+        label: 'Skrining imunisasi tetanus (vaksin Td)',
+        note: 'Status, urutan, dan catatan imunisasi Td',
+        display: tetanusDisplay
+      },
+      {
+        number: 7,
+        label: 'Beri tablet tambah darah',
+        note: 'Target minimal 90 tablet; data kosong tidak diartikan sebagai 0 tablet',
+        display: supplementationDisplay
+      },
+      {
+        number: 8,
+        label: 'Tes laboratorium',
+        note: 'Hb, triple eliminasi, protein urine, golongan darah, dan rhesus',
+        display: laboratoryAssessmentDisplay
+      },
+      {
+        number: 9,
+        label: 'Tata laksana penanganan kasus',
+        note: 'Penanganan anemia, preeklamsia, dan KEK',
+        display: caseManagementDisplay
+      },
+      {
+        number: 10,
+        label: 'Temu wicara / konseling',
+        note: 'Status dan catatan konseling',
+        display: counsellingDisplay
+      },
+      {
+        number: 11,
+        label: 'Pemeriksaan USG',
+        note: 'Target minimal 2 kali; status dan hasil USG obstetri',
+        display: ultrasoundDisplay
+      },
+      {
+        number: 12,
+        label: 'Skrining kesehatan jiwa dan jadwal kunjungan ulang',
+        note: 'Skrining jiwa didukung; jadwal ulang belum tersedia sebagai field terstruktur',
+        display: mentalHealthDisplay
+      }
+    ];
+
+    const table = document.createElement('table');
+    table.className = 'anc-summary-table';
+    const caption = document.createElement('caption');
+    caption.textContent = 'Ketersediaan hasil pemeriksaan ANC pada kunjungan K1 sampai K6';
+    table.appendChild(caption);
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    const componentHead = document.createElement('th');
+    componentHead.scope = 'col';
+    componentHead.textContent = 'Komponen 12T';
+    headRow.appendChild(componentHead);
+    visits.forEach(function(visit) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = visit;
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    components.forEach(function(component) {
+      const row = document.createElement('tr');
+      const label = document.createElement('th');
+      label.scope = 'row';
+      const labelText = document.createElement('span');
+      labelText.className = 'anc-component-label';
+      labelText.textContent = component.number + '. ' + component.label;
+      const labelNote = document.createElement('small');
+      labelNote.className = 'anc-component-note';
+      labelNote.textContent = component.note;
+      label.append(labelText, labelNote);
+      row.appendChild(label);
+      visits.forEach(function(visit) {
+        const cell = document.createElement('td');
+        if (!byVisit[visit].length) {
+          cell.className = 'anc-cell no-visit';
+          cell.textContent = '—';
+          cell.title = 'Kunjungan ' + visit + ' belum tercatat pada timeline.';
+        } else {
+          renderAncComponentCell(cell, byVisit[visit], component);
+        }
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    tableHost.appendChild(table);
+
+    if (otherAnc.length) {
+      unclassified.hidden = false;
+      unclassified.textContent = otherAnc.length +
+        ' peristiwa ANC tidak memiliki klasifikasi K1-K6. Detailnya tetap ditampilkan pada riwayat klinis.';
+    }
+  }
+
+  function ancVisitCode(event) {
+    const source = String(event && event.event_subtype || '').toUpperCase();
+    const match = source.match(/(?:^|[^A-Z0-9])K([1-6])(?:$|[^A-Z0-9])/);
+    return match ? 'K' + match[1] : '';
+  }
+
+  function bloodPressureLabel(event) {
+    const systolic = isPresent(event && event.systolic_bp) ? formatNumber(event.systolic_bp) : '';
+    const diastolic = isPresent(event && event.diastolic_bp) ? formatNumber(event.diastolic_bp) : '';
+    if (systolic && diastolic) return systolic + ' / ' + diastolic + ' mmHg';
+    if (systolic) return systolic + ' / — mmHg';
+    if (diastolic) return '— / ' + diastolic + ' mmHg';
+    return null;
+  }
+
+  function bodyMeasurementLabel(event) {
+    const values = [];
+    if (isPresent(event && event.body_weight_kg)) {
+      values.push('BB ' + valueWithUnit(event.body_weight_kg, 'kg'));
+    }
+    if (isPresent(event && event.body_height_cm)) {
+      values.push('TB ' + valueWithUnit(event.body_height_cm, 'cm'));
+    }
+    return values.length ? values.join(' · ') : null;
+  }
+
+  function renderAncComponentCell(cell, events, component) {
+    const displays = events.map(function(event) {
+      return { event: event, display: component.display(event) };
+    });
+    const types = displays.map(function(item) { return item.display.type; });
+    const cellType = types.indexOf('conflict') !== -1 ? 'conflict'
+      : types.indexOf('value') !== -1 ? 'recorded'
+        : types.indexOf('not-done') !== -1 ? 'not-done'
+          : types.indexOf('not-recorded') !== -1 ? 'missing' : 'unavailable';
+    cell.className = 'anc-cell ' + cellType;
+    displays.forEach(function(item) {
+      const entry = document.createElement('div');
+      entry.className = 'anc-cell-entry';
+      if (displays.length > 1) {
+        const date = document.createElement('small');
+        date.className = 'anc-event-date';
+        date.textContent = item.event.event_date ? formatDate(item.event.event_date) : 'Tanggal tidak tersedia';
+        entry.appendChild(date);
+      }
+      item.display.lines.forEach(function(line) {
+        const text = document.createElement('span');
+        text.className = 'anc-value-line state-' + line.type;
+        text.textContent = line.label;
+        entry.appendChild(text);
+      });
+      if (item.display.type === 'conflict') {
+        const detail = document.createElement('button');
+        detail.type = 'button';
+        detail.className = 'text-button anc-source-link';
+        detail.textContent = 'Lihat detail sumber';
+        detail.addEventListener('click', function() {
+          focusTimelineEventDetail(item.event.timeline_event_id);
+        });
+        entry.appendChild(detail);
+      }
+      cell.appendChild(entry);
+    });
+    if (displays.length > 1) {
+      cell.title = displays.length + ' peristiwa ANC memakai label K yang sama; semua tanggal ditampilkan.';
+    }
+  }
+
+  function makeClinicalDisplay(lines) {
+    const safeLines = (lines || []).filter(function(line) { return line && isPresent(line.label); });
+    const types = safeLines.map(function(line) { return line.type; });
+    const type = types.indexOf('conflict') !== -1 ? 'conflict'
+      : types.indexOf('value') !== -1 ? 'value'
+        : types.indexOf('not-done') !== -1 ? 'not-done'
+          : types.indexOf('not-recorded') !== -1 ? 'not-recorded' : 'unsupported';
+    return {
+      type: type,
+      lines: safeLines.length ? safeLines : [{ type: 'not-recorded', label: 'Belum tercatat' }]
+    };
+  }
+
+  function simpleClinicalDisplay(value) {
+    return makeClinicalDisplay([isPresent(value)
+      ? { type: 'value', label: String(value) }
+      : { type: 'not-recorded', label: 'Belum tercatat' }]);
+  }
+
+  function getClinicalDisplayState(options) {
+    const normalized = clinicalCodeKey(options.normalizedValue);
+    if (isTrue(options.conflict)) return { type: 'conflict', label: 'Data berbeda antar sumber' };
+    if (options.supported === false) return { type: 'unsupported', label: 'Data belum tersedia' };
+    if ((options.explicitNotDoneValues || []).indexOf(normalized) !== -1) {
+      return { type: 'not-done', label: options.notDoneLabel || 'Tidak dilakukan' };
+    }
+    if (normalized === 'NOT_RECORDED' || normalized === 'NOT_REPORTED') {
+      return { type: 'not-recorded', label: 'Belum tercatat' };
+    }
+    if (normalized && normalized !== 'RECORDED_OTHER') {
+      const normalizedLabels = options.normalizedLabels || {};
+      return { type: 'value', label: normalizedLabels[normalized] || clinicalValueLabel(normalized) };
+    }
+    if (hasMeaningfulClinicalValue(options.value)) {
+      const formatter = options.valueFormatter || clinicalValueLabel;
+      return { type: 'value', label: formatter(options.value) };
+    }
+    return { type: 'not-recorded', label: 'Belum tercatat' };
+  }
+
+  function bodyMeasurementDisplay(event) {
+    return simpleClinicalDisplay(bodyMeasurementLabel(event));
+  }
+
+  function bloodPressureDisplay(event) {
+    return simpleClinicalDisplay(bloodPressureLabel(event));
+  }
+
+  function fetalAssessmentDisplay(event) {
+    const djj = fhrCategoryLabel(event && event.fhr_category);
+    return makeClinicalDisplay([
+      djj ? { type: 'value', label: 'DJJ: ' + djj } : { type: 'not-recorded', label: 'DJJ: Belum tercatat' },
+      { type: 'unsupported', label: 'Presentasi: Data belum tersedia' }
+    ]);
+  }
+
+  function tetanusDisplay(event) {
+    if (isTrue(event && event.tt_conflict_flag)) {
+      return makeClinicalDisplay([{ type: 'conflict', label: 'Data berbeda antar sumber' }]);
+    }
+    const normalized = event && event.tt_status_norm;
+    const normalizedKey = clinicalCodeKey(normalized);
+    if (normalizedKey === 'NOT_TESTED' || normalizedKey === 'NO') {
+      return makeClinicalDisplay([{ type: 'not-done', label: 'Tidak dilakukan skrining' }]);
+    }
+    if (normalizedKey && normalizedKey !== 'NOT_RECORDED' && normalizedKey !== 'RECORDED_OTHER') {
+      return simpleClinicalDisplay(clinicalValueLabel(normalized));
+    }
+    const order = tetanusOrderLabel(event && event.tt_order);
+    if (order) return simpleClinicalDisplay(order);
+    return simpleClinicalDisplay(hasMeaningfulClinicalValue(event && event.tt_immunization)
+      ? clinicalValueLabel(event.tt_immunization) : null);
+  }
+
+  function tetanusOrderLabel(value) {
+    if (!hasMeaningfulClinicalValue(value)) return null;
+    const text = String(value).trim();
+    if (/^TT\s*\d+$/i.test(text)) return text.replace(/\s+/g, '').toUpperCase();
+    const number = Number(text);
+    return Number.isFinite(number) && number >= 0 ? 'TT' + formatNumber(number) : clinicalValueLabel(text);
+  }
+
+  function supplementationDisplay(event) {
+    const lines = [];
+    if (isTrue(event && event.ttd_conflict_flag)) {
+      lines.push({ type: 'conflict', label: 'TTD: Data berbeda antar sumber' });
+    } else {
+      const quantity = nonNegativeQuantityLabel(event && event.ttd_obtained);
+      if (quantity) {
+        lines.push({ type: 'value', label: 'TTD: ' + quantity + ' tablet' });
+      } else if (hasMeaningfulSupplementationText(event && event.iron_supplementation)) {
+        lines.push({ type: 'value', label: 'TTD: ' + supplementationTextLabel(event.iron_supplementation) });
+      } else {
+        lines.push({ type: 'not-recorded', label: 'TTD: Belum tercatat' });
+      }
+    }
+    if (isTrue(event && event.mms_conflict_flag)) {
+      lines.push({ type: 'conflict', label: 'MMS: Data berbeda antar sumber' });
+    } else {
+      const mms = nonNegativeQuantityLabel(event && event.mms_obtained);
+      if (mms) lines.push({ type: 'value', label: 'MMS: ' + mms + ' tablet' });
+    }
+    return makeClinicalDisplay(lines);
+  }
+
+  function nonNegativeQuantityLabel(value) {
+    if (!isPresent(value)) return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? formatNumber(number) : null;
+  }
+
+  function hasMeaningfulSupplementationText(value) {
+    if (!hasMeaningfulClinicalValue(value)) return false;
+    const text = String(value).trim();
+    return !/^-\s*\d+(?:[.,]\d+)?$/.test(text);
+  }
+
+  function supplementationTextLabel(value) {
+    const key = clinicalCodeKey(value);
+    if (key === 'YES' || key === 'GIVEN' || key === 'PROVIDED' || value === true) return 'Tercatat diberikan';
+    if (key === 'NO') return 'Tidak diberikan';
+    return clinicalValueLabel(value);
+  }
+
+  function laboratoryAssessmentDisplay(event) {
+    const lines = [];
+    if (isPresent(event && event.hemoglobin_g_dl)) {
+      lines.push({ type: 'value', label: 'Hb: ' + valueWithUnit(event.hemoglobin_g_dl, 'g/dL') });
+    }
+    appendLabResultLine(lines, 'HIV', event && event.lab_hiv, event && event.lab_hiv_norm, event && event.lab_hiv_conflict_flag);
+    appendLabResultLine(lines, 'Sifilis', event && event.lab_syphilis, event && event.lab_syphilis_norm, event && event.lab_syphilis_conflict_flag);
+    appendLabResultLine(lines, 'Hepatitis B', event && event.lab_hep_b, event && event.lab_hep_b_norm, event && event.lab_hep_b_conflict_flag);
+    appendDirectLabLine(lines, 'Golongan darah', event && event.lab_blood_group, event && event.lab_blood_group_conflict_flag);
+    appendDirectLabLine(lines, 'Rhesus', event && event.lab_rhesus, event && event.lab_rhesus_conflict_flag);
+    appendProteinUrineLine(lines, event || {});
+    if (hasMeaningfulClinicalValue(event && event.lab_12t)) {
+      lines.push({ type: 'value', label: 'Catatan lab: ' + clinicalItemsLabel(event.lab_12t) });
+    }
+    return makeClinicalDisplay(lines.length ? lines : [{ type: 'not-recorded', label: 'Belum tercatat' }]);
+  }
+
+  function appendLabResultLine(lines, label, rawValue, normalizedValue, conflict) {
+    const state = getClinicalDisplayState({
+      value: rawValue,
+      normalizedValue: normalizedValue,
+      conflict: conflict,
+      explicitNotDoneValues: ['NOT_TESTED'],
+      notDoneLabel: 'Tidak diperiksa'
+    });
+    if (state.type !== 'not-recorded') lines.push({ type: state.type, label: label + ': ' + state.label });
+  }
+
+  function appendDirectLabLine(lines, label, value, conflict) {
+    const state = getClinicalDisplayState({ value: value, conflict: conflict });
+    if (state.type !== 'not-recorded') lines.push({ type: state.type, label: label + ': ' + state.label });
+  }
+
+  function appendProteinUrineLine(lines, event) {
+    const state = getClinicalDisplayState({
+      value: event.protein_urine_raw,
+      normalizedValue: event.protein_urine_category_norm,
+      conflict: event.protein_urine_conflict_flag,
+      explicitNotDoneValues: ['NOT_TESTED'],
+      notDoneLabel: 'Tidak diperiksa'
+    });
+    if (state.type !== 'not-recorded') lines.push({ type: state.type, label: 'Protein urine: ' + state.label });
+  }
+
+  function caseManagementDisplay(event) {
+    const lines = [];
+    appendManagementLine(lines, 'Anemia', event && event.treatment_anemia);
+    appendManagementLine(lines, 'Preeklamsia', event && event.treatment_preeclampsia);
+    appendManagementLine(lines, 'KEK', event && event.treatment_kek);
+    return makeClinicalDisplay(lines.length ? lines : [{ type: 'not-recorded', label: 'Belum tercatat' }]);
+  }
+
+  function appendManagementLine(lines, label, value) {
+    if (hasMeaningfulClinicalValue(value)) {
+      lines.push({ type: 'value', label: label + ': ' + clinicalItemsLabel(value) });
+    }
+  }
+
+  function counsellingDisplay(event) {
+    const state = getClinicalDisplayState({
+      value: event && event.counselling,
+      normalizedValue: event && event.counselling_status_norm,
+      conflict: event && event.counselling_conflict_flag,
+      explicitNotDoneValues: ['NO'],
+      normalizedLabels: { YES: 'Dilakukan' },
+      notDoneLabel: 'Tidak dilakukan'
+    });
+    return makeClinicalDisplay([state]);
+  }
+
+  function ultrasoundDisplay(event) {
+    const state = getClinicalDisplayState({
+      value: event && event.ultrasound_obstetric,
+      normalizedValue: event && event.ultrasound_obstetric_norm,
+      conflict: event && event.usg_conflict_flag,
+      explicitNotDoneValues: ['NOT_TESTED'],
+      normalizedLabels: {
+        NORMAL_REPORTED: 'Normal / hasil normal tercatat',
+        ABNORMAL_SUSPECTED: 'Kelainan / dugaan abnormal tercatat',
+        UNKNOWN: 'Hasil tercatat, kategori belum dikenali'
+      },
+      notDoneLabel: 'Tidak diperiksa'
+    });
+    return makeClinicalDisplay([state]);
+  }
+
+  function mentalHealthDisplay(event) {
+    const screening = getClinicalDisplayState({
+      value: event && event.mental_health_screening,
+      normalizedValue: event && event.mental_health_screening_status_norm,
+      conflict: event && event.mental_health_conflict_flag,
+      explicitNotDoneValues: ['NO'],
+      normalizedLabels: { YES: 'Dilakukan' },
+      notDoneLabel: 'Tidak dilakukan'
+    });
+    return makeClinicalDisplay([
+      { type: screening.type, label: 'Skrining keswa: ' + screening.label },
+      { type: 'unsupported', label: 'Jadwal ulang: Data belum tersedia' }
+    ]);
+  }
+
+  function hasMeaningfulClinicalValue(value) {
+    if (Array.isArray(value)) return value.some(hasMeaningfulClinicalValue);
+    if (!isPresent(value)) return false;
+    if (typeof value === 'boolean' || typeof value === 'number') return true;
+    const normalized = String(value).trim().toUpperCase();
+    return ['-', '—', 'NULL', 'N/A', 'NA'].indexOf(normalized) === -1;
+  }
+
+  function clinicalItemsLabel(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return values.filter(hasMeaningfulClinicalValue).map(function(item) {
+      return clinicalValueLabel(item);
+    }).join(' · ');
+  }
+
+  function isTrue(value) {
+    return value === true || value === 1 || String(value || '').toUpperCase() === 'TRUE' || String(value || '') === '1';
+  }
+
+  function renderClinicalTimeline() {
+    const container = document.getElementById('clinicalTimeline');
+    container.replaceChildren();
+    const events = AppState.timeline || [];
+    if (!events.length) {
+      setInlineState('timelineStatus', 'Riwayat klinis belum tersedia.', '', 'empty');
+      return;
+    }
+    setInlineState('timelineStatus', events.length + ' peristiwa klinis.', 'Riwayat diurutkan dari catatan paling lama ke paling baru.', 'success');
+    events.forEach(function(event) {
+      container.appendChild(createTimelineEventCard(event));
+    });
+  }
+
+  function createTimelineEventCard(event) {
+    const item = document.createElement('article');
+    item.className = 'timeline-item event-' + String(event.event_type || 'other').toLowerCase();
+    item.id = timelineEventDomId(event.timeline_event_id);
+    const marker = document.createElement('div');
+    marker.className = 'timeline-marker';
+    marker.setAttribute('aria-hidden', 'true');
+
+    const card = document.createElement('div');
+    card.className = 'card timeline-card';
+    const header = document.createElement('div');
+    header.className = 'timeline-card-header';
+    const titleWrap = document.createElement('div');
+    const date = document.createElement('p');
+    date.className = 'timeline-date';
+    date.textContent = event.event_date ? formatDate(event.event_date) : 'Tanggal tidak tersedia';
+    const title = document.createElement('h3');
+    title.textContent = clinicalEventLabel(event);
+    titleWrap.append(date, title);
+    const type = document.createElement('span');
+    type.className = 'event-type-badge';
+    type.textContent = clinicalEventTypeLabel(event.event_type);
+    header.append(titleWrap, type);
+
+    const metrics = document.createElement('dl');
+    metrics.className = 'clinical-metrics';
+    appendEventMetrics(metrics, event);
+    card.append(header, metrics);
+
+    const sourceLine = document.createElement('p');
+    sourceLine.className = 'timeline-source-line';
+    sourceLine.textContent = 'Sumber: ' + formatSources(event.source_systems);
+    card.appendChild(sourceLine);
+
+    if (isTrue(event.conflict_flag) || hasComponentConflict(event)) {
+      const warning = document.createElement('div');
+      warning.className = 'conflict-banner';
+      warning.textContent = 'Data berbeda antar sumber pada sedikitnya satu komponen. Sistem tidak memilih salah satu nilai secara otomatis; buka detail sumber untuk membandingkannya.';
+      card.appendChild(warning);
+    }
+
+    const details = document.createElement('details');
+    details.className = 'source-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Pemeriksaan lain, audit, dan detail sumber';
+    details.appendChild(summary);
+    const detailHelp = document.createElement('p');
+    detailHelp.textContent = 'Kartu hanya menampilkan field utama dari read model. Muat detail untuk melihat data tambahan dan nilai sumber yang dipertahankan dalam payload.';
+    details.appendChild(detailHelp);
+    if (event.source_record_count > 1) {
+      const count = document.createElement('p');
+      count.textContent = event.source_record_count + ' catatan sumber';
+      details.appendChild(count);
+    }
+    const confidence = clinicalTierLabel(event.clinical_use_tier || event.event_status);
+    if (confidence) {
+      const tier = document.createElement('p');
+      tier.textContent = confidence;
+      details.appendChild(tier);
+    }
+
+    const payloadButton = document.createElement('button');
+    payloadButton.type = 'button';
+    payloadButton.className = 'text-button payload-button';
+    payloadButton.textContent = isTrue(event.conflict_flag) || hasComponentConflict(event)
+      ? 'Lihat perbedaan sumber' : 'Lihat detail data';
+    const payload = document.createElement('div');
+    payload.className = 'event-payload';
+    payload.hidden = true;
+    payloadButton.addEventListener('click', function() {
+      loadEventPayload(event, payloadButton, payload);
+    });
+    details.append(payloadButton, payload);
+    card.appendChild(details);
+    item.append(marker, card);
+    return item;
+  }
+
+  function appendEventMetrics(container, event) {
+    const type = String(event.event_type || '').toUpperCase();
+    if (type === 'ANC') {
+      appendMetric(container, 'Usia kehamilan', valueWithUnit(event.gestational_age_weeks, 'minggu'));
+      appendMetric(
+        container,
+        'Tekanan darah',
+        bloodPressureLabel(event) || (event.conflict_flag
+          ? 'Nilai kanonik belum tersedia; periksa detail sumber'
+          : 'Belum ada data terstruktur')
+      );
+      appendMetric(container, 'Berat badan', valueWithUnit(event.body_weight_kg, 'kg'));
+      appendMetric(container, 'Tinggi badan', valueWithUnit(event.body_height_cm, 'cm'));
+      appendMetric(container, 'Hb', valueWithUnit(event.hemoglobin_g_dl, 'g/dL'));
+      appendMetric(container, 'LILA', valueWithUnit(event.lila_cm, 'cm'));
+      appendMetric(container, 'Tinggi fundus', clinicalValueLabel(event.fundal_height));
+      appendMetric(container, 'Denyut jantung janin', fhrCategoryLabel(event.fhr_category));
+      appendMetric(container, 'Imunisasi Td', clinicalDisplayText(tetanusDisplay(event)));
+      appendMetric(container, 'TTD / MMS', clinicalDisplayText(supplementationDisplay(event)));
+      appendMetric(container, 'Laboratorium', clinicalDisplayText(laboratoryAssessmentDisplay(event)));
+      appendMetric(container, 'Tata laksana', clinicalDisplayText(caseManagementDisplay(event)));
+      appendMetric(container, 'Konseling', clinicalDisplayText(counsellingDisplay(event)));
+      appendMetric(container, 'USG', clinicalDisplayText(ultrasoundDisplay(event)));
+      appendMetric(container, 'Skrining kesehatan jiwa', clinicalDisplayText(mentalHealthDisplay(event), true));
+      appendMetric(container, 'Diagnosis', clinicalItemsLabel(event.diagnoses));
+      appendMetric(container, 'Obat / terapi', clinicalItemsLabel(event.medications));
+      appendMetric(container, 'Prosedur', clinicalItemsLabel(event.procedures));
+    } else if (type === 'OUTCOME') {
+      appendMetric(container, 'Tempat', deliveryPlaceLabel(event.delivery_place || event.facility));
+      appendMetric(container, 'Cara persalinan', deliveryModeLabel(event.delivery_mode));
+      appendMetric(container, 'Berat lahir', valueWithUnit(event.newborn_birth_weight_g, 'g'));
+    } else if (type === 'PNC_SUMMARY') {
+      appendMetric(container, 'PNC 1', event.pnc_1 ? '✓' : '—');
+      appendMetric(container, 'PNC 2', event.pnc_2 ? '✓' : '—');
+      appendMetric(container, 'PNC 3', event.pnc_3 ? '✓' : '—');
+      appendMetric(container, 'Kunjungan nifas terakhir', formatDate(event.event_date));
+    }
+    appendMetric(container, 'Fasilitas', event.facility ? cleanFacilityLabel(event.facility) : null);
+    appendMetric(container, 'Desa', event.desa ? cleanDisplayText(event.desa) : null);
+  }
+
+  function clinicalDisplayText(display, includeUnsupported) {
+    const lines = (display && display.lines ? display.lines : []).filter(function(line) {
+      return line.type !== 'not-recorded' && (includeUnsupported || line.type !== 'unsupported');
+    });
+    return lines.length ? lines.map(function(line) { return line.label; }).join(' · ') : null;
+  }
+
+  function componentConflictFields() {
+    return [
+      'tt_conflict_flag', 'ttd_conflict_flag', 'mms_conflict_flag', 'usg_conflict_flag',
+      'counselling_conflict_flag', 'mental_health_conflict_flag', 'lab_hiv_conflict_flag',
+      'lab_hep_b_conflict_flag', 'lab_syphilis_conflict_flag', 'lab_blood_group_conflict_flag',
+      'lab_rhesus_conflict_flag', 'protein_urine_conflict_flag'
+    ];
+  }
+
+  function hasComponentConflict(event) {
+    return componentConflictFields().some(function(field) { return isTrue(event && event[field]); });
+  }
+
+  function timelineEventDomId(timelineEventId) {
+    return 'timeline-event-' + String(timelineEventId || '').replace(/[^A-Za-z0-9_-]/g, function(character) {
+      return '_' + character.codePointAt(0).toString(16);
+    });
+  }
+
+  function focusTimelineEventDetail(timelineEventId) {
+    const item = document.getElementById(timelineEventDomId(timelineEventId));
+    if (!item) return;
+    if (typeof item.scrollIntoView === 'function') item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const details = item.querySelector('.source-details');
+    if (details) details.open = true;
+    const button = item.querySelector('.payload-button');
+    const payload = item.querySelector('.event-payload');
+    if (button && payload && payload.dataset.loaded !== 'true' && !button.disabled) button.click();
+  }
+
+  async function loadEventPayload(event, button, output) {
+    if (output.dataset.loaded === 'true') {
+      output.hidden = !output.hidden;
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Memuat detail...';
+    try {
+      const payload = await callServer(
+        'getEventPayload',
+        AppState.token,
+        event.pregnancy_key,
+        event.timeline_event_id
+      );
+      renderEventPayload(output, payload);
+      output.dataset.loaded = 'true';
+      output.hidden = false;
+      button.textContent = 'Sembunyikan detail';
+    } catch (error) {
+      output.replaceChildren();
+      const failure = document.createElement('p');
+      failure.textContent = 'Detail data tidak dapat dimuat.';
+      output.appendChild(failure);
+      output.hidden = false;
+      handleProtectedError(error, 'clinicalMessage');
+      button.textContent = 'Coba lagi';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function backToPatientSearch() {
+    setClinicalView('search');
+  }
+
+  function backToPregnancyList() {
+    setClinicalView('patient');
+  }
+
+  function setClinicalView(view) {
+    const views = {
+      search: document.getElementById('patientSearchView'),
+      patient: document.getElementById('patientDetailView'),
+      pregnancy: document.getElementById('pregnancyDetailView')
+    };
+    Object.keys(views).forEach(function(key) {
+      if (views[key]) views[key].hidden = key !== view;
+    });
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }
+
+  function setInlineState(elementId, title, detail, type) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    element.replaceChildren();
+    element.className = 'inline-state' + (type ? ' ' + type : '');
+    element.hidden = !title && !detail;
+    if (title) {
+      const strong = document.createElement('strong');
+      strong.textContent = title;
+      element.appendChild(strong);
+    }
+    if (detail) {
+      const span = document.createElement('span');
+      span.textContent = detail;
+      element.appendChild(span);
+    }
+  }
+
+  function handleClinicalError(error, stateElementId) {
+    const message = error && error.message ? error.message : String(error);
+    if (isAuthenticationError(message)) {
+      handleProtectedError(error, 'loginMessage');
+      return;
+    }
+    if (/script function not found|function.*not found/i.test(message)) {
+      setInlineState(
+        stateElementId,
+        'Backend klinis belum lengkap pada deployment ini.',
+        'Pastikan PatientService.gs, PregnancyService.gs, TimelineService.gs, dan AuditService.gs sudah disalin, lalu deploy sebagai versi baru.',
+        'error'
+      );
+      return;
+    }
+    setInlineState(stateElementId, 'Gagal mengambil data.', 'Silakan coba kembali.', 'error');
+  }
+
+  function appendFact(container, label, value) {
+    const wrapper = document.createElement('div');
+    if (/fasilitas|sumber data/i.test(label)) wrapper.className = 'fact-wide';
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const description = document.createElement('dd');
+    description.textContent = value == null || value === '' ? '-' : value;
+    wrapper.append(term, description);
+    container.appendChild(wrapper);
+  }
+
+  function appendMetric(container, label, value) {
+    if (!isPresent(value)) return;
+    appendFact(container, label, String(value));
+  }
+
+  function isPresent(value) {
+    return value !== null && typeof value !== 'undefined' && value !== '';
+  }
+
+  function formatDate(value) {
+    if (!value) return '-';
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return String(value);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    return String(Number(match[3])) + ' ' + months[Number(match[2]) - 1] + ' ' + match[1];
+  }
+
+  function formatNumber(value) {
+    if (!isPresent(value)) return '';
+    const number = Number(value);
+    return Number.isFinite(number)
+      ? new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 }).format(number)
+      : String(value);
+  }
+
+  function valueWithUnit(value, unit) {
+    return isPresent(value) ? formatNumber(value) + ' ' + unit : null;
+  }
+
+  function formatSources(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).join(', ') || '-';
+    if (!value) return '-';
+    const text = String(value).trim();
+    if (!text) return '-';
+    if (text.charAt(0) === '[') {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed.filter(Boolean).join(', ') || '-';
+      } catch (error) {
+        // Keep the original value when it is not valid JSON.
+      }
+    }
+    return text;
+  }
+
+  function cleanDisplayText(value) {
+    const text = String(value || '').trim();
+    if (!text) return '-';
+    const normalized = text.replace(/_/g, ' ').replace(/\s+/g, ' ');
+    if (/[A-Z]/.test(normalized) && !/[a-z]/.test(normalized)) {
+      return normalized.toLocaleLowerCase('id-ID').replace(/\b\p{L}/gu, function(letter) {
+        return letter.toLocaleUpperCase('id-ID');
+      });
+    }
+    return normalized;
+  }
+
+  function cleanFacilityLabel(value) {
+    const text = cleanDisplayText(value);
+    if (text === '-') return text;
+    return text.replace(/^PUSKESMAS\s+PKM\s+/i, 'Puskesmas ')
+      .replace(/^PKM\s+/i, 'Puskesmas ');
+  }
+
+  const CLINICAL_VALUE_LABELS = Object.freeze({
+    NOT_TESTED: 'Tidak diperiksa',
+    NOT_ASSESSED: 'Belum dinilai',
+    NORMAL_REPORTED: 'Dilaporkan normal',
+    ABNORMAL_SUSPECTED: 'Kelainan / dugaan abnormal tercatat',
+    ABNORMAL_REPORTED: 'Dilaporkan tidak normal',
+    NORMAL: 'Normal',
+    ABNORMAL: 'Tidak normal',
+    PRESENT: 'Terdeteksi',
+    NOT_PRESENT: 'Tidak terdeteksi',
+    ABSENT: 'Tidak terdeteksi',
+    REACTIVE: 'Reaktif',
+    NON_REACTIVE: 'Tidak reaktif',
+    POSITIVE: 'Positif',
+    NEGATIVE: 'Negatif',
+    UNKNOWN: 'Belum diketahui',
+    NOT_RECORDED: 'Belum tercatat',
+    NOT_REPORTED: 'Belum dilaporkan',
+    NOT_AVAILABLE: 'Belum tersedia',
+    MISSING: 'Belum tersedia',
+    YES: 'Ya',
+    NO: 'Tidak',
+    RECORDED_OTHER: 'Tercatat; kategori lain',
+    TTD: 'TTD',
+    MMS: 'MMS',
+    SIGIZI: 'SiGizi',
+    EPUS: 'ePus',
+    OTHER: 'Lainnya',
+    SPONTANEOUS: 'Spontan',
+    SPONTANEOUS_VAGINAL: 'Pervaginam spontan',
+    SPONTANEOUS_VAGINAL_DELIVERY: 'Persalinan pervaginam spontan',
+    VAGINAL: 'Pervaginam',
+    VAGINAL_DELIVERY: 'Persalinan pervaginam',
+    ASSISTED_VAGINAL: 'Pervaginam dengan bantuan',
+    CESAREAN: 'Operasi sesar',
+    CAESAREAN: 'Operasi sesar',
+    CESAREAN_SECTION: 'Operasi sesar',
+    C_SECTION: 'Operasi sesar',
+    SECTIO_CAESAREA: 'Operasi sesar',
+    SC: 'Operasi sesar',
+    VACUUM: 'Ekstraksi vakum',
+    VACUUM_EXTRACTION: 'Ekstraksi vakum',
+    FORCEPS: 'Forceps',
+    HOME: 'Rumah',
+    HOSPITAL: 'Rumah sakit',
+    HEALTH_CENTER: 'Puskesmas',
+    PRIMARY_HEALTH_CENTER: 'Puskesmas',
+    CLINIC: 'Klinik'
+  });
+
+  function clinicalCodeKey(value) {
+    return String(value == null ? '' : value).trim().toUpperCase()
+      .replace(/[\s\/-]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function clinicalValueLabel(value) {
+    if (!isPresent(value)) return null;
+    if (typeof value === 'number') return formatNumber(value);
+    const text = String(value).trim();
+    if (!text) return null;
+    const key = clinicalCodeKey(text);
+    if (CLINICAL_VALUE_LABELS[key]) return CLINICAL_VALUE_LABELS[key];
+    return cleanDisplayText(text);
+  }
+
+  function fhrCategoryLabel(value) {
+    return clinicalValueLabel(value);
+  }
+
+  function deliveryModeLabel(value) {
+    return clinicalValueLabel(value);
+  }
+
+  function deliveryPlaceLabel(value) {
+    if (!isPresent(value)) return null;
+    const key = clinicalCodeKey(value);
+    return CLINICAL_VALUE_LABELS[key] || cleanFacilityLabel(value);
+  }
+
+  function patientStatusLabel(status) {
+    const value = String(status || '').toUpperCase();
+    if (value === 'DELIVERED') return 'Persalinan tercatat';
+    if (value === 'ABORTION') return 'Abortus tercatat';
+    if (value === 'NO_CANONICAL_OUTCOME') return 'Luaran belum tercatat';
+    if (value === 'NO_LINKED_PREGNANCY') return 'Belum ada kehamilan tertaut';
+    return 'Status belum tersedia';
+  }
+
+  function pregnancyOutcomeLabel(pregnancy) {
+    const value = String(pregnancy.canonical_outcome_type || '').toUpperCase();
+    if (value === 'DELIVERY' || pregnancy.delivered_flag === true) return 'Persalinan';
+    if (value === 'ABORTION' || pregnancy.abortion_flag === true) return 'Abortus';
+    return 'Belum ada luaran tercatat';
+  }
+
+  function outcomeBadgeClass(outcomeType) {
+    const value = String(outcomeType || '').toUpperCase();
+    if (value === 'DELIVERY') return 'delivered';
+    if (value === 'ABORTION') return 'abortion';
+    return 'neutral';
+  }
+
+  function pregnancyPeriodLabel(pregnancy) {
+    if (pregnancy.canonical_outcome_date) {
+      const start = pregnancy.canonical_hpht || pregnancy.first_anc_date;
+      return start
+        ? 'Mulai ' + formatDate(start) + ' · Luaran ' + formatDate(pregnancy.canonical_outcome_date)
+        : 'Luaran ' + formatDate(pregnancy.canonical_outcome_date);
+    }
+    const estimates = [];
+    if (pregnancy.canonical_hpht) estimates.push('HPHT ' + formatDate(pregnancy.canonical_hpht));
+    if (pregnancy.canonical_hpl) estimates.push('HPL ' + formatDate(pregnancy.canonical_hpl));
+    if (estimates.length) return estimates.join(' · ');
+    if (pregnancy.first_anc_date && pregnancy.last_anc_date) {
+      return 'Catatan ANC ' + formatDate(pregnancy.first_anc_date) + ' – ' + formatDate(pregnancy.last_anc_date);
+    }
+    if (pregnancy.last_anc_date) return 'ANC terakhir ' + formatDate(pregnancy.last_anc_date);
+    return 'Periode belum tersedia';
+  }
+
+  function clinicalEventTypeLabel(eventType) {
+    const value = String(eventType || '').toUpperCase();
+    if (value === 'ANC') return 'ANC';
+    if (value === 'OUTCOME') return 'Luaran';
+    if (value === 'PNC_SUMMARY') return 'Nifas';
+    return 'Klinis';
+  }
+
+  function clinicalEventLabel(event) {
+    const type = String(event.event_type || '').toUpperCase();
+    const subtype = String(event.event_subtype || '').toUpperCase();
+    if (type === 'OUTCOME') return subtype === 'ABORTION' ? 'Abortus' : 'Persalinan';
+    if (type === 'PNC_SUMMARY') return 'Pelayanan Nifas';
+    if (type === 'ANC') return subtype && subtype !== 'ANC' ? 'ANC ' + subtype : 'Pemeriksaan ANC';
+    return event.event_label || 'Peristiwa klinis';
+  }
+
+  function clinicalTierLabel(value) {
+    const normalized = String(value || '').toUpperCase();
+    if (normalized === 'CLINICAL_READY') return 'Data terkonfirmasi';
+    if (normalized === 'PROVISIONAL') return 'Data perlu verifikasi';
+    return '';
+  }
+
+  const PAYLOAD_FIELD_LABELS = Object.freeze({
+    source: 'Sumber',
+    source_system: 'Sistem sumber',
+    source_systems: 'Sistem sumber',
+    source_record_count: 'Jumlah catatan sumber',
+    record_date: 'Tanggal catatan',
+    visit_date: 'Tanggal kunjungan',
+    event_date: 'Tanggal peristiwa',
+    event_subtype: 'Jenis kunjungan',
+    gestational_age_weeks: 'Usia kehamilan',
+    systolic_bp: 'Tekanan darah sistolik',
+    diastolic_bp: 'Tekanan darah diastolik',
+    blood_pressure: 'Tekanan darah',
+    body_weight_kg: 'Berat badan',
+    body_height_cm: 'Tinggi badan',
+    lila_cm: 'Lingkar lengan atas (LILA)',
+    hemoglobin_g_dl: 'Hemoglobin (Hb)',
+    fundal_height: 'Tinggi fundus uteri',
+    fhr_category: 'Denyut jantung janin',
+    fetal_heart_rate: 'Denyut jantung janin',
+    blood_group: 'Golongan darah',
+    golongan_darah: 'Golongan darah',
+    hiv: 'HIV',
+    hiv_result: 'Hasil pemeriksaan HIV',
+    usg: 'USG',
+    ultrasound: 'USG',
+    protein_urine: 'Protein urine',
+    glucose_urine: 'Glukosa urine',
+    tetanus_status: 'Status imunisasi tetanus',
+    tt_immunization: 'Catatan imunisasi tetanus',
+    tt_status_norm: 'Status imunisasi tetanus',
+    tt_order: 'Urutan imunisasi tetanus',
+    iron_tablets: 'Tablet tambah darah',
+    iron_supplementation: 'Catatan tablet tambah darah',
+    ttd_obtained: 'Jumlah TTD diperoleh',
+    mms_obtained: 'Jumlah MMS diperoleh',
+    counselling: 'Konseling',
+    counselling_status_norm: 'Status konseling',
+    ultrasound_obstetric: 'USG obstetri',
+    ultrasound_obstetric_norm: 'Hasil USG obstetri',
+    mental_health_screening: 'Skrining kesehatan jiwa',
+    mental_health_screening_status_norm: 'Status skrining kesehatan jiwa',
+    lab_hiv: 'HIV',
+    lab_hiv_norm: 'Hasil HIV',
+    lab_hep_b: 'Hepatitis B',
+    lab_hep_b_norm: 'Hasil hepatitis B',
+    lab_syphilis: 'Sifilis',
+    lab_syphilis_norm: 'Hasil sifilis',
+    lab_blood_group: 'Golongan darah',
+    lab_rhesus: 'Rhesus',
+    lab_12t: 'Catatan laboratorium 12T',
+    protein_urine_raw: 'Protein urine',
+    protein_urine_category_norm: 'Hasil protein urine',
+    treatment_anemia: 'Tata laksana anemia',
+    treatment_preeclampsia: 'Tata laksana preeklamsia',
+    treatment_kek: 'Tata laksana KEK',
+    diagnoses: 'Diagnosis',
+    medications: 'Obat / terapi',
+    procedures: 'Prosedur',
+    competing_values: 'Nilai yang berbeda antar sumber',
+    values: 'Nilai sumber',
+    records: 'Catatan sumber'
+  });
+
+  function renderEventPayload(container, payload) {
+    container.replaceChildren();
+    const value = parseEventPayload(payload);
+    if (value === null || value === '') {
+      const empty = document.createElement('p');
+      empty.textContent = 'Detail sumber tidak tersedia.';
+      container.appendChild(empty);
+      return;
+    }
+    const intro = document.createElement('p');
+    intro.className = 'payload-intro';
+    intro.textContent = 'Nilai di bawah berasal dari payload audit. Bila sumber berbeda, semua nilai dipertahankan dan tidak dipilih otomatis oleh aplikasi.';
+    container.appendChild(intro);
+    appendPayloadNode(container, value, '', 0);
+  }
+
+  function parseEventPayload(payload) {
+    if (payload == null || payload === '') return null;
+    if (typeof payload === 'object') return payload;
+    try {
+      return JSON.parse(String(payload));
+    } catch (error) {
+      return String(payload);
+    }
+  }
+
+  function appendPayloadNode(parent, value, key, depth) {
+    if (depth > 6) {
+      const truncated = document.createElement('p');
+      truncated.textContent = 'Detail bertingkat terlalu dalam untuk ditampilkan.';
+      parent.appendChild(truncated);
+      return;
+    }
+    if (Array.isArray(value)) {
+      if (!value.length) return;
+      if (value.every(function(item) { return item === null || typeof item !== 'object'; })) {
+        appendPayloadFact(parent, payloadFieldLabel(key), value.map(function(item) {
+          return payloadValueLabel(key, item);
+        }).join(', '));
+        return;
+      }
+      const group = document.createElement('div');
+      group.className = 'payload-group';
+      if (key) {
+        const heading = document.createElement('h4');
+        heading.textContent = payloadFieldLabel(key);
+        group.appendChild(heading);
+      }
+      value.forEach(function(item, index) {
+        const record = document.createElement('div');
+        record.className = 'payload-record';
+        const title = document.createElement('strong');
+        title.textContent = 'Catatan ' + (index + 1);
+        record.appendChild(title);
+        appendPayloadNode(record, item, '', depth + 1);
+        group.appendChild(record);
+      });
+      parent.appendChild(group);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      const section = document.createElement('div');
+      section.className = 'payload-section';
+      if (key) {
+        const heading = document.createElement('h4');
+        heading.textContent = payloadFieldLabel(key);
+        section.appendChild(heading);
+      }
+      const facts = document.createElement('dl');
+      facts.className = 'payload-facts';
+      const nested = [];
+      Object.keys(value).forEach(function(field) {
+        if (isHiddenPayloadField(field)) return;
+        const fieldValue = value[field];
+        if (fieldValue !== null && typeof fieldValue === 'object') {
+          nested.push({ key: field, value: fieldValue });
+        } else if (isPresent(fieldValue)) {
+          appendPayloadFact(facts, payloadFieldLabel(field), payloadValueLabel(field, fieldValue));
+        }
+      });
+      if (facts.children.length) section.appendChild(facts);
+      nested.forEach(function(item) {
+        appendPayloadNode(section, item.value, item.key, depth + 1);
+      });
+      if (section.children.length) parent.appendChild(section);
+      return;
+    }
+    const plain = document.createElement('p');
+    plain.textContent = payloadValueLabel(key, value);
+    parent.appendChild(plain);
+  }
+
+  function appendPayloadFact(container, label, value) {
+    const wrapper = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = label || 'Nilai';
+    const description = document.createElement('dd');
+    description.textContent = isPresent(value) ? String(value) : '-';
+    wrapper.append(term, description);
+    container.appendChild(wrapper);
+  }
+
+  function payloadFieldLabel(key) {
+    const normalized = String(key || '').trim().toLowerCase();
+    return PAYLOAD_FIELD_LABELS[normalized] || cleanDisplayText(normalized);
+  }
+
+  function payloadValueLabel(key, value) {
+    if (typeof value === 'boolean') return value ? 'Ya' : 'Tidak';
+    const normalized = String(key || '').toLowerCase();
+    if (/date$/.test(normalized) && /^\d{4}-\d{2}-\d{2}/.test(String(value))) return formatDate(value);
+    if (normalized === 'gestational_age_weeks') return valueWithUnit(value, 'minggu');
+    if (normalized === 'systolic_bp' || normalized === 'diastolic_bp') return valueWithUnit(value, 'mmHg');
+    if (normalized === 'body_weight_kg') return valueWithUnit(value, 'kg');
+    if (normalized === 'body_height_cm' || normalized === 'lila_cm') return valueWithUnit(value, 'cm');
+    if (normalized === 'hemoglobin_g_dl') return valueWithUnit(value, 'g/dL');
+    if (normalized === 'ttd_obtained' || normalized === 'mms_obtained') return valueWithUnit(value, 'tablet');
+    return clinicalValueLabel(value) || '-';
+  }
+
+  function isHiddenPayloadField(key) {
+    const field = String(key || '');
+    return /^(table|table_name|source_table|dataset|dataset_id|project|project_id|timeline_event_id|patient_key|pregnancy_key|event_sort_order|source_encounter_group_ids?|pregnancy_resolution_method)$/i.test(field) ||
+      /^canonical_/i.test(field) || /_(?:conflict|invalid)_flag$/i.test(field);
+  }
+
+  async function loadUsers() {
+    setLoading(true, 'Memuat pengguna...');
+    try {
+      AppState.users = await callServer('listUsers', AppState.token);
+      renderUsers();
+      showMessage('adminMessage', '', '');
+    } catch (error) {
+      handleProtectedError(error, 'adminMessage');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function renderUsers() {
+    const query = document.getElementById('userSearch').value.trim().toLowerCase();
+    const users = AppState.users.filter(function(user) {
+      return !query || String(user.nama || '').toLowerCase().includes(query) || user.email.toLowerCase().includes(query);
+    });
+    const body = document.getElementById('usersTableBody');
+    body.replaceChildren();
+    setTextContent('userCount', users.length + ' pengguna');
+
+    if (!users.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.className = 'empty-state';
+      cell.textContent = 'Tidak ada pengguna yang sesuai.';
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+
+    users.forEach(function(user) {
+      const row = document.createElement('tr');
+      row.appendChild(userIdentityCell(user));
+      row.appendChild(textCell(roleLabel(user.role)));
+      const statusCell = document.createElement('td');
+      const status = document.createElement('span');
+      status.className = 'status-badge ' + (user.is_active ? 'active' : 'inactive');
+      status.textContent = user.is_active ? 'Aktif' : 'Nonaktif';
+      statusCell.appendChild(status);
+      row.appendChild(statusCell);
+      row.appendChild(textCell(user.updated_at || '-'));
+      row.appendChild(userActionsCell(user));
+      body.appendChild(row);
+    });
+  }
+
+  function userIdentityCell(user) {
+    const cell = document.createElement('td');
+    const name = document.createElement('strong');
+    name.textContent = user.nama || '-';
+    const email = document.createElement('small');
+    email.textContent = user.email;
+    cell.append(name, email);
+    return cell;
+  }
+
+  function textCell(value) {
+    const cell = document.createElement('td');
+    cell.textContent = value;
+    return cell;
+  }
+
+  function userActionsCell(user) {
+    const cell = document.createElement('td');
+    cell.className = 'row-actions';
+    const edit = actionButton('Edit', function() { openUserDialog(user); });
+    const reset = actionButton('Setel ulang kata sandi', function() { promptResetPassword(user.email); });
+    const remove = actionButton('Hapus', function() { confirmDeleteUser(user.email); }, 'danger-link');
+    cell.append(edit, reset, remove);
+    return cell;
+  }
+
+  function actionButton(label, handler, className) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'text-button ' + (className || '');
+    button.textContent = label;
+    button.addEventListener('click', handler);
+    return button;
+  }
+
+  function openUserDialog(user) {
+    const editing = !!user;
+    const requiredIds = [
+      'userDialog', 'editingEmail', 'userEmail', 'userName', 'userRole',
+      'userActive', 'temporaryPassword', 'temporaryPasswordGroup'
+    ];
+    const missingIds = requiredIds.filter(function(id) {
+      return !document.getElementById(id);
+    });
+    if (missingIds.length) {
+      showMessage(
+        'adminMessage',
+        'Form pengguna belum sinkron dengan aplikasi. Salin ulang PageAdmin.html lalu deploy sebagai versi baru.',
+        'error'
+      );
+      return;
+    }
+
+    setTextContent('userDialogTitle', editing ? 'Edit pengguna' : 'Tambah pengguna');
+    document.getElementById('editingEmail').value = editing ? user.email : '';
+    document.getElementById('userEmail').value = editing ? user.email : '';
+    document.getElementById('userEmail').disabled = editing;
+    document.getElementById('userName').value = editing ? user.nama : '';
+    document.getElementById('userRole').value = editing ? user.role : 'user';
+    document.getElementById('userActive').checked = editing ? user.is_active : true;
+    setOptionalFieldValue('userPuskesmas', editing ? (user.puskesmas || '') : '');
+    setOptionalFieldValue('userKecamatan', editing ? (user.kecamatan || '') : '');
+    setOptionalFieldValue('userDesa', editing ? (user.desa || '') : '');
+    setOptionalFieldValue('userIdUser', editing && user.id_user != null ? user.id_user : '');
+    document.getElementById('temporaryPassword').value = '';
+    document.getElementById('temporaryPassword').required = !editing;
+    document.getElementById('temporaryPasswordGroup').hidden = editing;
+    showMessage('userFormMessage', '', '');
+    const dialog = document.getElementById('userDialog');
+    if (typeof dialog.showModal === 'function') {
+      dialog.showModal();
+    } else {
+      dialog.setAttribute('open', '');
+    }
+  }
+
+  function closeUserDialog() {
+    const dialog = document.getElementById('userDialog');
+    if (dialog && typeof dialog.close === 'function') dialog.close();
+    else if (dialog) dialog.removeAttribute('open');
+    const form = document.getElementById('userForm');
+    if (form) form.reset();
+  }
+
+  function setOptionalFieldValue(elementId, value) {
+    const element = document.getElementById(elementId);
+    if (element) element.value = value == null ? '' : value;
+  }
+
+  function getOptionalFieldValue(elementId) {
+    const element = document.getElementById(elementId);
+    return element ? String(element.value || '').trim() : '';
+  }
+
+  async function handleUserSave(event) {
+    event.preventDefault();
+    const editingEmail = document.getElementById('editingEmail').value;
+    const data = {
+      email: document.getElementById('userEmail').value.trim(),
+      nama: document.getElementById('userName').value.trim(),
+      role: document.getElementById('userRole').value,
+      isActive: document.getElementById('userActive').checked,
+      puskesmas: getOptionalFieldValue('userPuskesmas') || null,
+      kecamatan: getOptionalFieldValue('userKecamatan') || null,
+      desa: getOptionalFieldValue('userDesa') || null,
+      id_user: getOptionalFieldValue('userIdUser') || null,
+      temporaryPassword: document.getElementById('temporaryPassword').value
+    };
+    setLoading(true, 'Menyimpan pengguna...');
+    try {
+      if (editingEmail) {
+        await callServer('updateUser', AppState.token, editingEmail, data);
+      } else {
+        await callServer('createUser', AppState.token, data);
+      }
+      closeUserDialog();
+      await loadUsers();
+      showMessage('adminMessage', 'Data pengguna berhasil disimpan.', 'success');
+    } catch (error) {
+      handleProtectedError(error, 'userFormMessage');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function promptResetPassword(email) {
+    const password = window.prompt('Masukkan kata sandi sementara baru untuk ' + email + ':');
+    if (password === null) return;
+    setLoading(true, 'Menyetel ulang kata sandi...');
+    try {
+      await callServer('resetUserPassword', AppState.token, email, password);
+      showMessage('adminMessage', 'Kata sandi sementara berhasil dibuat. Pengguna wajib menggantinya saat login.', 'success');
+      await loadUsers();
+    } catch (error) {
+      handleProtectedError(error, 'adminMessage');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmDeleteUser(email) {
+    if (!window.confirm('Hapus akun ' + email + '? Tindakan ini tidak dapat dibatalkan.')) return;
+    setLoading(true, 'Menghapus pengguna...');
+    try {
+      await callServer('deleteUser', AppState.token, email);
+      await loadUsers();
+      showMessage('adminMessage', 'Akun berhasil dihapus.', 'success');
+    } catch (error) {
+      handleProtectedError(error, 'adminMessage');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleProtectedError(error, containerId) {
+    const message = error && error.message ? error.message : String(error);
+    if (isAuthenticationError(message)) {
+      clearLocalSession();
+      showLogin();
+      showMessage('loginMessage', message, 'error');
+      return;
+    }
+    showMessage(containerId, message, 'error');
+  }
+
+  function isAuthenticationError(message) {
+    return /sesi|masuk kembali|akun.*tidak (?:terdaftar|aktif)|password sementara|kata sandi sementara/i.test(String(message || ''));
+  }
+
+  function roleLabel(role) {
+    return role === 'admin' ? 'Administrator' : 'Pengguna';
+  }
+
+  function togglePassword(inputId, button) {
+    const input = document.getElementById(inputId);
+    const visible = input.type === 'text';
+    input.type = visible ? 'password' : 'text';
+    button.textContent = visible ? 'Lihat' : 'Sembunyikan';
+  }
+
+  function showMessage(containerId, message, type) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.replaceChildren();
+    if (!message) return;
+    const alert = document.createElement('div');
+    alert.className = 'alert ' + (type || 'info');
+    alert.textContent = message;
+    container.appendChild(alert);
+  }
+
+  function setTextContent(elementId, value) {
+    const element = document.getElementById(elementId);
+    if (!element) {
+      console.warn('Elemen HTML tidak ditemukan:', elementId);
+      return false;
+    }
+    element.textContent = value == null ? '' : String(value);
+    return true;
+  }
+
+  function findElementByIds(elementIds) {
+    for (let i = 0; i < elementIds.length; i += 1) {
+      const element = document.getElementById(elementIds[i]);
+      if (element) return element;
+    }
+    return null;
+  }
+
+  function setElementVisible(element, visible) {
+    if (!element) return;
+    element.hidden = !visible;
+    element.style.display = visible ? '' : 'none';
+  }
+
+  function setLoading(isLoading, message) {
+    AppState.loadingCount = Math.max(0, AppState.loadingCount + (isLoading ? 1 : -1));
+    const overlay = document.getElementById('loadingOverlay');
+    setTextContent('loadingText', message || 'Memuat...');
+    if (overlay) overlay.hidden = AppState.loadingCount === 0;
+  }
+</script>
